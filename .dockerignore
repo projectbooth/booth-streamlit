@@ -1,0 +1,12 @@
+.git
+.github
+bin
+charts
+docs
+hack
+test
+web/node_modules
+web/dist
+web/*.tsbuildinfo
+**/*_test.go
+*.md

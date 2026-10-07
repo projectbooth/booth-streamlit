@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "booth-streamlit.fullname" . }}
+  labels:
+    {{- include "booth-streamlit.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "booth-streamlit.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "booth-streamlit.selectorLabels" . | nindent 8 }}
+        booth.projectbooth.io/module: streamlit
+    spec:
+      serviceAccountName: {{ include "booth-streamlit.serviceAccountName" . }}
+      # No token yet: the scaffold never talks to the Kubernetes API. Starting app containers will
+      # need a namespace-scoped Role, added together with that code, not ahead of it.
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: booth-streamlit
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: BOOTH_HTTP_ADDR
+              value: ":8080"
+            - name: BOOTH_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "booth-streamlit.dsnSecretName" . }}
+                  key: {{ .Values.postgres.dsnSecret.key }}
+            {{- if .Values.eventBus.enabled }}
+            {{- if .Values.eventBus.credentialsSecret.enabled }}
+            # The credential booth-core minted for this module's declared `events` (ADR 0050). The
+            # file is re-read on every reconnect, so core's in-place renewal is picked up.
+            - name: BOOTH_NATS_CREDS_FILE
+              value: /etc/booth/event-bus/nats.creds
+            {{- if .Values.nats.url }}
+            - name: BOOTH_NATS_URL
+              value: {{ .Values.nats.url | quote }}
+            {{- else }}
+            - name: BOOTH_NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.eventBus.credentialsSecret.name }}
+                  key: url
+            {{- end }}
+            {{- else }}
+            - name: BOOTH_NATS_URL
+              value: {{ required "nats.url is required when eventBus.credentialsSecret.enabled is false: with no credentials Secret to take the address from, the event bus has nowhere to connect (set eventBus.enabled=false to leave the event bus out on purpose)" .Values.nats.url | quote }}
+            {{- end }}
+            {{- end }}
+          # /livez does not look at the database or the bus on purpose: restarting the pod cannot
+          # fix either. /healthz (readiness, and what core polls) looks at the database.
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if and .Values.eventBus.enabled .Values.eventBus.credentialsSecret.enabled }}
+          volumeMounts:
+            # A directory mount, deliberately not a single-file (sub-path) mount: the kubelet updates
+            # a mounted Secret in place when core renews the credential, but never a sub-path one.
+            - name: event-bus-credentials
+              mountPath: /etc/booth/event-bus
+              readOnly: true
+          {{- end }}
+      {{- if and .Values.eventBus.enabled .Values.eventBus.credentialsSecret.enabled }}
+      volumes:
+        - name: event-bus-credentials
+          secret:
+            secretName: {{ .Values.eventBus.credentialsSecret.name }}
+            # Not `optional`: if booth-core hasn't written the credential the pod waits, visibly,
+            # instead of starting without one.
+            items:
+              - key: nats.creds
+                path: nats.creds
+      {{- end }}

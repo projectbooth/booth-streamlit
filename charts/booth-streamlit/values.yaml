@@ -1,0 +1,84 @@
+# Default values for booth-streamlit.
+#
+# Scaffold: this chart runs the module backend only. The per-app containers, their resource
+# limits, the running-app cap and the RBAC to create them arrive with the app lifecycle; nothing
+# here starts a Streamlit process yet.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/projectbooth/booth-streamlit
+  tag: "" # defaults to Chart.appVersion; CI overrides it with the image it just built
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8080
+
+# App definitions live in this module's own database on the shared PostgreSQL cluster (ADR 0014).
+#
+# By default booth-core provisions it (ADR 0053/0054): the BoothModule declares
+# `database: {enabled: true}`, and core creates a database and unprivileged role and delivers them
+# as the Secret `booth-database-credentials` (key `dsn`) in this release's namespace. The pod sits
+# in CreateContainerConfigError for a moment after install until core has written it.
+#
+# To use your own database instead, set provisionedByCore to false and name a Secret holding the
+# connection string in dsnSecret. This chart never creates the database, role or Secret itself.
+postgres:
+  provisionedByCore: true
+  dsnSecret:
+    # Empty means "booth-database-credentials" when provisionedByCore is true; required (no
+    # default) when it is false.
+    name: ""
+    key: dsn
+
+# The event bus (NATS, ADR 0021) that dashboard.created/updated/deleted events go out on, one per
+# app (ADR 0018, payload per ADR 0046).
+#
+# booth-core's bus authenticates every connection (ADR 0049/0050): the BoothModule below declares
+# `events: {publish: [dashboard.*]}`, and core answers by writing a Secret into this namespace with
+# a credential scoped to exactly that plus the bus's in-cluster URL. The pod mounts it; there is
+# nothing to configure. The pod will not start until core has written it, on purpose: a module that
+# came up without the credential would look healthy while no app ever reached the catalog.
+eventBus:
+  # false leaves the bus out entirely: no `events` on the manifest, no credential, no connection.
+  # Apps still run; booth-catalog never hears about them. An explicit choice, never the result of
+  # forgetting a value.
+  enabled: true
+  credentialsSecret:
+    # Read the credential from booth-core's Secret (the normal case). Set false only against a bus
+    # with authentication off (a test stand-in), and then nats.url is required.
+    enabled: true
+    # The name booth-core gives it (ADR 0050).
+    name: booth-event-bus-credentials
+
+nats:
+  # Overrides the URL in the credentials Secret. Leave empty in a real install. Required when
+  # eventBus.credentialsSecret.enabled is false.
+  url: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# The backend itself is small: a Go process holding app metadata and proxying traffic. Sized for a
+# single-node homelab; the per-app containers get their own, separate limits.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+serviceAccount:
+  create: true
+  name: ""
