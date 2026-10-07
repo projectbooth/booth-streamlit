@@ -1,0 +1,3 @@
+# Force LF everywhere: CI runs on Linux, gofmt and shell scripts break on CRLF.
+* text=auto eol=lf
+*.sh text eol=lf
