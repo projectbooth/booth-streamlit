@@ -1,0 +1,43 @@
+# Registers booth-streamlit with booth-core's module registry (ADR 0019): the BoothModule CRD is
+# the only thing core reads to know this module exists (contracts/module-manifest.md). Uses
+# booth-core's own CRD type (booth.projectbooth.io/v1alpha1), which that chart installs.
+#
+# iframe-proxy (ADR 0005/0016): a Streamlit app is its own full web app, and this module's own
+# management UI is served by the same backend inside the same iframe. Build nav group (ADR 0017).
+# No adminNavPath: one view for every role, with write actions gated by role inside it.
+apiVersion: booth.projectbooth.io/v1alpha1
+kind: BoothModule
+metadata:
+  name: streamlit
+  labels:
+    {{- include "booth-streamlit.labels" . | nindent 4 }}
+spec:
+  id: streamlit
+  displayName: Streamlit
+  icon: app-window
+  version: {{ .Chart.AppVersion | quote }}
+  contractVersion: "0.1.0"
+  hasOwnUi: true
+  uiIntegrationMode: iframe-proxy
+  navGroup: build
+  navPath: /streamlit
+  healthCheckPath: /healthz
+  requiredScopes:
+    - catalog.read
+    - storage.read
+  {{- if .Values.postgres.provisionedByCore }}
+  # ADR 0053/0054: ask booth-core for this module's own PostgreSQL database and role, delivered
+  # as the Secret `booth-database-credentials`. Left out only when the operator supplies their own.
+  database:
+    enabled: true
+  {{- end }}
+  {{- if .Values.eventBus.enabled }}
+  # Event-bus usage (ADR 0050). booth-core derives this module's NATS credential, and its
+  # per-subject permissions, from exactly this. Publish only: the module consumes nothing.
+  events:
+    publish:
+      - dashboard.*
+  {{- end }}
+  serviceRef:
+    name: {{ include "booth-streamlit.fullname" . }}
+    port: {{ .Values.service.port }}

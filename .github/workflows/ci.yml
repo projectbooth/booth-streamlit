@@ -1,0 +1,112 @@
+name: CI
+
+# Layers 1-2 (contracts/testing-strategy.md, ADR 0024): unit + contract tests, on every push and PR.
+# No cluster, but the database tests run against a real PostgreSQL container
+# (hack/docker-compose.emulators.yml, the same file used locally), and the event-bus tests embed a
+# real nats-server in-process. Branch protection on main should require every job here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go-test:
+    runs-on: ubuntu-24.04 # pinned, not ubuntu-latest (ADR 0099)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: azure/setup-helm@v4 # test/contract renders the chart with `helm template`
+
+      - name: Verify gofmt
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: Start PostgreSQL
+        run: docker compose -f hack/docker-compose.emulators.yml up -d --wait
+
+      - name: Unit + contract tests
+        env:
+          # A missing database must fail the build, never silently skip its tests green.
+          BOOTH_TEST_REQUIRE_EMULATORS: "1"
+        run: |
+          eval "$(sh hack/test-env.sh)"
+          go test -race -count=1 ./...
+
+      - name: Database logs on failure
+        if: failure()
+        run: docker compose -f hack/docker-compose.emulators.yml logs --tail=100
+
+  web-test:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test -- --run
+
+      - name: Build
+        run: npm run build
+
+  helm-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: helm lint (default and own-database values)
+        working-directory: charts/booth-streamlit
+        run: |
+          helm lint .
+          helm lint . --set postgres.provisionedByCore=false --set postgres.dsnSecret.name=my-db
+
+  image-build:
+    # Catches a broken Dockerfile on the PR that breaks it, not at release time. Not pushed.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false

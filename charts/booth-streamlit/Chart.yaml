@@ -1,0 +1,9 @@
+apiVersion: v2
+name: booth-streamlit
+description: >
+  Project Booth's code-first dashboard/app module: users write Streamlit apps in Python and run
+  them as hosted apps, one container per app, reached through the shell via iframe-proxy.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/projectbooth/booth-streamlit

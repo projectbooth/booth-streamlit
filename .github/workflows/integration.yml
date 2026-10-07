@@ -1,0 +1,93 @@
+name: Integration
+
+# Layer 3 (contracts/testing-strategy.md, ADR 0024): real-cluster integration tests on kind. Runs
+# on merge to main, nightly, and by hand; not on every push. See test/integration/README.md for
+# what each job covers and what it does not.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 8 * * *" # nightly
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  standins:
+    runs-on: ubuntu-24.04 # pinned, not ubuntu-latest (ADR 0099)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: booth-streamlit-ci
+
+      - uses: azure/setup-helm@v4
+
+      - name: Build and load the booth-streamlit image
+        run: |
+          docker build -t booth-streamlit:ci .
+          kind load docker-image booth-streamlit:ci --name booth-streamlit-ci
+
+      - name: Deploy with stand-in PostgreSQL and NATS
+        run: test/integration/deploy-standins.sh booth-streamlit:ci
+
+      - name: Verify
+        run: test/integration/verify.sh
+
+      - name: Dump state on failure
+        if: failure()
+        run: |
+          kubectl -n booth-streamlit get all
+          kubectl -n booth-streamlit describe pods | tail -60
+          kubectl -n booth-streamlit logs deployment/booth-streamlit --tail=200 || true
+
+  real-core:
+    # The install path a user actually takes: booth-core provisions the database and mints the
+    # bus credential from this chart's BoothModule. booth-core is built at a pinned commit, not its
+    # moving main (contracts/testing-strategy.md); bump CORE_REF deliberately.
+    runs-on: ubuntu-24.04
+    env:
+      CORE_REF: 9e2999948079b55d19493aab72718e10940b9803
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: projectbooth/booth-core
+          ref: ${{ env.CORE_REF }}
+          path: booth-core
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: booth-streamlit-realcore
+
+      - uses: azure/setup-helm@v4
+
+      - name: Build and load booth-core and booth-streamlit images
+        run: |
+          # dependency build (not update) installs exactly what core's Chart.lock pins.
+          helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+          helm dependency build booth-core/charts/booth-core
+          docker build -t booth-core:ci booth-core
+          docker build -t booth-streamlit:ci .
+          kind load docker-image booth-core:ci booth-streamlit:ci --name booth-streamlit-realcore
+
+      - name: Deploy booth-core and booth-streamlit
+        run: test/integration/deploy-realcore.sh booth-core booth-core:ci booth-streamlit:ci
+
+      - name: Verify (including the REAL_CORE checks)
+        env:
+          REAL_CORE: "1"
+        run: test/integration/verify.sh
+
+      - name: Dump state on failure
+        if: failure()
+        run: |
+          kubectl get pods -A
+          kubectl -n booth-system logs deployment/booth-core --tail=150 || true
+          kubectl get boothmodules -A -o yaml || true
+          kubectl -n booth-streamlit get secrets || true
+          kubectl -n booth-streamlit describe pods | tail -60
+          kubectl -n booth-streamlit logs deployment/booth-streamlit --tail=200 || true

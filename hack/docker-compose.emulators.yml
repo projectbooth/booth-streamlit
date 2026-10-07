@@ -1,0 +1,28 @@
+# Local stand-in for the one external service booth-streamlit's tests talk to. CI runs the same
+# image (see .github/workflows/ci.yml), so a green local run means the same thing a green CI run
+# does. Not used at runtime; test tooling only.
+#
+#   docker compose -f hack/docker-compose.emulators.yml up -d --wait
+#   eval "$(sh hack/test-env.sh)"        # export the BOOTH_TEST_* variables (bash/zsh)
+#   go test ./...
+#   docker compose -f hack/docker-compose.emulators.yml down -v
+#
+# NATS needs no container: the event-bus tests embed a real nats-server in-process. Port 15436 so
+# this can run alongside the other booth-* repos' test databases (catalog uses 15433). An explicit
+# project name, because every booth-* repo keeps this file in a directory called "hack", and
+# Compose would otherwise put them all in one project.
+name: booth-streamlit-test
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: booth
+      POSTGRES_PASSWORD: booth-test
+      POSTGRES_DB: booth_streamlit_test
+    ports: ["15436:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booth -d booth_streamlit_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
