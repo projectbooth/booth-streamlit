@@ -8,6 +8,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual runs, and the ensure-main-checked workflow's backstop when GitHub drops a push event
+  # (it did for the PR #5 merge, a1570a3: no push event, no check suites, so no run at all).
+  workflow_dispatch: {}
 
 permissions:
   contents: read
