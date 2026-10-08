@@ -50,3 +50,14 @@ def test_database_url_explains_why_it_cannot_work(monkeypatch):
         assert bs.database_url() == "postgresql://localhost:5432/bdb_ws_x"
     finally:
         srv.shutdown()
+
+
+
+def test_the_app_uid_has_a_passwd_entry():
+    """libpq needs it to connect with a URL that names no user (DATABASE_URL); runs in the image."""
+    import os
+    import pwd
+
+    if os.getuid() != 65532:  # only meaningful inside the runtime image
+        return
+    assert pwd.getpwuid(65532).pw_name == "booth"

@@ -18,6 +18,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # No file watcher: code changes arrive as a new pod, never by editing files in place.
     STREAMLIT_SERVER_FILE_WATCHER_TYPE=none
 
+# A real passwd entry for the uid apps run as. libpq (psycopg, psql) asks the OS for the current
+# user's name when DATABASE_URL names no user, and fails with "local user with ID 65532 does not
+# exist" without one; the integration test found this. The credential sidecar connects as whatever
+# its lease names, so the name itself doesn't matter.
+RUN groupadd --gid 65532 booth && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin booth
+
 COPY images/app-runtime/requirements.txt /opt/booth/requirements.txt
 RUN pip install -r /opt/booth/requirements.txt
 COPY images/app-runtime/booth_streamlit /opt/booth/lib/booth_streamlit
