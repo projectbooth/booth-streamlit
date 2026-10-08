@@ -47,12 +47,16 @@ type App struct {
 	Target *url.URL
 }
 
-// ErrNotFound means no such app.
+// ErrNotFound means no such app, or one the caller may not open; the two are indistinguishable.
 var ErrNotFound = errors.New("app not found")
 
-// Resolver looks up an app by id.
+// ErrNotRunning means the app exists and the caller may open it, but it has no running container.
+var ErrNotRunning = errors.New("app is not running")
+
+// Resolver looks up an app for a verified caller. It applies the visibility rule (the app's own
+// workspace only; owners always, others only if shared) and returns ErrNotFound otherwise.
 type Resolver interface {
-	Resolve(ctx context.Context, id string) (App, error)
+	Resolve(ctx context.Context, c identity.Caller, id string) (App, error)
 }
 
 // Verifier is the identity check; *identity.Verifier satisfies it.
@@ -92,11 +96,15 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	app, err := h.Apps.Resolve(r.Context(), chi.URLParam(r, "id"))
-	// Sharing (ADR 0104 item 5): members of the app's own workspace only, any role. An app in
-	// another workspace is reported exactly like a missing one, so ids can't be probed.
+	app, err := h.Apps.Resolve(r.Context(), caller, chi.URLParam(r, "id"))
+	// Sharing (ADR 0104 item 5, ADR 0105): the resolver applies it. The workspace check here is a
+	// second guard, so a resolver bug can't open another workspace's app.
 	if errors.Is(err, ErrNotFound) || (err == nil && app.Workspace != caller.Workspace) {
 		http.NotFound(w, r)
+		return
+	}
+	if errors.Is(err, ErrNotRunning) {
+		http.Error(w, "This app is not running.", http.StatusServiceUnavailable)
 		return
 	}
 	if err != nil {

@@ -105,10 +105,12 @@ func New(ctx context.Context, cfg Config) (*Verifier, error) {
 		cfg.GroupsClaim = DefaultGroupsClaim
 	}
 	keys := oidc.NewRemoteKeySet(ctx, strings.TrimSuffix(cfg.IssuerURL, "/")+"/.well-known/jwks.json")
-	return newWithKeys(cfg, keys), nil
+	return NewWithKeySet(cfg, keys), nil
 }
 
-func newWithKeys(cfg Config, keys oidc.KeySet) *Verifier {
+// NewWithKeySet builds a Verifier over a given key set instead of the issuer's JWKS. Tests use it
+// to verify assertions they sign themselves, exactly as production verifies core's.
+func NewWithKeySet(cfg Config, keys oidc.KeySet) *Verifier {
 	if cfg.GroupsClaim == "" {
 		cfg.GroupsClaim = DefaultGroupsClaim
 	}

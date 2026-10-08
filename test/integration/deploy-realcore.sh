@@ -19,7 +19,7 @@ ns=booth-streamlit
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 here="$repo/test/integration/realcore"
 
-echo "--- Keycloak (realm: a viewer of acme-analytics, an owner of other-team)"
+echo "--- Keycloak (realm: owner, editor and viewer of acme-analytics; an owner of other-team)"
 kubectl create namespace keycloak --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 password=$(openssl rand -hex 12)
 kubectl -n keycloak create secret generic realcore-test-password --from-literal=password="$password" \
