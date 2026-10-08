@@ -18,6 +18,8 @@ import (
 	"github.com/projectbooth/booth-streamlit/internal/config"
 	"github.com/projectbooth/booth-streamlit/internal/db"
 	"github.com/projectbooth/booth-streamlit/internal/events"
+	"github.com/projectbooth/booth-streamlit/internal/identity"
+	"github.com/projectbooth/booth-streamlit/internal/proxy"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -48,9 +50,24 @@ func run() error {
 	bus := events.New(events.Config{URL: cfg.NATSURL, CredentialsFile: cfg.NATSCredsFile})
 	go bus.Run(ctx)
 
+	verifier, err := identity.New(ctx, identity.Config{IssuerURL: cfg.IframeIssuerURL, GroupsClaim: cfg.GroupsClaim})
+	if err != nil {
+		return err
+	}
+	apps, err := proxy.ParseStatic(cfg.StaticApps)
+	if err != nil {
+		return err
+	}
+	if len(apps) > 0 {
+		log.Printf("WARNING: serving %d app(s) from BOOTH_STREAMLIT_STATIC_APPS, a test seam that the app model replaces", len(apps))
+	}
+
 	server := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewRouter(api.Deps{DB: pool, Bus: bus, Web: api.WebDir(cfg.WebDir)}),
+		Addr: cfg.HTTPAddr,
+		Handler: api.NewRouter(api.Deps{
+			DB: pool, Bus: bus, Web: api.WebDir(cfg.WebDir),
+			Apps: &proxy.Handler{Verifier: verifier, Apps: apps},
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

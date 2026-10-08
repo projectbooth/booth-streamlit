@@ -33,6 +33,14 @@ spec:
           env:
             - name: BOOTH_HTTP_ADDR
               value: ":8080"
+            - name: BOOTH_IFRAME_IDENTITY_ISSUER_URL
+              value: {{ required "identity.issuerUrl is required: app traffic is authenticated by booth-core's X-Booth-Identity assertion (ADR 0069)" .Values.identity.issuerUrl | quote }}
+            - name: BOOTH_OIDC_GROUPS_CLAIM
+              value: {{ .Values.identity.groupsClaim | quote }}
+            {{- with .Values.staticApps }}
+            - name: BOOTH_STREAMLIT_STATIC_APPS
+              value: {{ . | quote }}
+            {{- end }}
             - name: BOOTH_POSTGRES_DSN
               valueFrom:
                 secretKeyRef:
