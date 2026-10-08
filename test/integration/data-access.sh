@@ -96,7 +96,10 @@ kc_groups() { # USER add|remove GROUP-PATH
   fi
 }
 
-app_pod() { kubectl -n "$ns" get pod -l "booth.projectbooth.io/app-id=$1" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null; }
+# Empty while the app has no Running pod (e.g. mid-roll: the Recreate strategy stops the old pod
+# before starting the new one). Never fails: under set -e a bare `p=$(app_pod)` would otherwise end
+# the script silently, which it did in CI run 37838444181.
+app_pod() { kubectl -n "$ns" get pod -l "booth.projectbooth.io/app-id=$1" --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | awk '{print $1}' || true; }
 as_user_code() { # APP-ID PYTHON-CODE: runs it in the app's streamlit container
   kubectl -n "$ns" exec "$(app_pod "$1")" -c streamlit -- python -c "$2"
 }
