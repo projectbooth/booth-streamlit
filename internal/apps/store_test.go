@@ -29,8 +29,8 @@ func stores(t *testing.T) map[string]Store {
 	}
 	t.Cleanup(pool.Close)
 	// A clean slate per test run; migrations re-apply.
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS apps; DELETE FROM streamlit_schema_migrations WHERE component = 'apps'`); err != nil {
-		if _, err2 := pool.Exec(ctx, `DROP TABLE IF EXISTS apps`); err2 != nil {
+	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS app_ownership_changes, apps; DELETE FROM streamlit_schema_migrations WHERE component = 'apps'`); err != nil {
+		if _, err2 := pool.Exec(ctx, `DROP TABLE IF EXISTS app_ownership_changes, apps`); err2 != nil {
 			t.Fatal(err2)
 		}
 	}
