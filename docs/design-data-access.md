@@ -1,6 +1,9 @@
 # booth-streamlit data access (ADR 0104): plan for review
 
-Status: **plan only, for the coordinator's ruling**, 2026-10-08. No implementation code exists.
+Status: **accepted** (ADR 0107, 2026-10-08), with the rulings folded in below: the subject is
+`streamlit:<workspace>:<appId>`; every take-over is logged; the UI states the whole-workspace read;
+the residuals in item 8 are accepted for v0. Built in five PRs, in order: minting, gate refresh and
+postgres sidecar; file proxy; lakehouse; pip; lineage and events.
 
 Inputs:
 - ADR 0104 and 0105, and ADR 0095 with `contracts/credential-sidecar.md`.
@@ -17,7 +20,9 @@ The backend mints one workload token per app:
 - `roleCeiling: viewer`
 - `owner: <app's owner sub>`
 - `workspace: <app's workspace>`
-- `subject: streamlit:<workspace>`, as you specified; see item 8.4 for one suggestion.
+- `subject: streamlit:<workspace>:<appId>` (ADR 0107 item 2), so core's audit can tell apps apart.
+  Core's subject rule (`^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9._:-]{1,200}$`) admits it. If a real mint
+  refuses it anyway, the fallback is `streamlit:<workspace>`, and the coordinator is told.
 
 Each app pod has exactly one identity, so this is ADR 0103's per-(workspace, owner) pattern with
 one identity per pod. booth-api's in-process sidecar manager isn't needed.
@@ -29,7 +34,9 @@ rule). A refusal (403, `ErrOwnerNoAccess`) is remembered for 30 s.
 - **In the module UI**, owners see the app as "Data access paused" with the reason: "<owner> no
   longer has access to <workspace>, or hasn't signed in for 7 days. Ask them to sign in, or take
   ownership." Taking ownership is a "Take ownership" button for any current workspace owner (the
-  ADR 0088 fallback); it sets the app's owner and the next mint uses it.
+  ADR 0088 fallback); it sets the app's owner and the next mint uses it. Each take-over is logged
+  (ADR 0107 item 7): who took over, which app, and the previous owner. It's written to the
+  backend's log and kept in the app's history.
 - **Inside the app**, viewers see a clear failure: `booth_streamlit` helpers raise
   `DataAccessPaused` with that text, and the Postgres proxy refuses connections.
 - **The app still renders.** Only its data stops.
@@ -108,6 +115,9 @@ file path is.
   - The broker refuses narrower scopes, so **an app can read everything its owner, capped at
     viewer, can read in that workspace's database and lakehouse.**
   - Declared sources (item 6) describe the app; they don't restrict it.
+  - The UI says so (ADR 0107 item 4). Wherever sources are shown, it notes that they don't limit
+    what the app reads. On a shared app it says in plain words: "this app can read any data you can
+    read in this workspace".
 
 ## 4. Storage and catalog files: the read proxy
 
