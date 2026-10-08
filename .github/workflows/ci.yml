@@ -8,8 +8,9 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Manual runs, and the ensure-main-checked workflow's backstop when GitHub drops a push event
-  # (it did for the PR #5 merge, a1570a3: no push event, no check suites, so no run at all).
+  # Manual runs: the recovery when GitHub drops a push event (it did for the PR #5 merge, a1570a3:
+  # no push event and no check suites, so no run at all). After every merge, check that main got
+  # CI and Integration runs, and dispatch whichever is missing.
   workflow_dispatch: {}
 
 permissions:
