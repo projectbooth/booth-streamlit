@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, type AppInput } from "./api";
-import { ErrorText, TrustNote } from "./components";
+import { ErrorText, SHARED_DATA_WORDING, TrustNote } from "./components";
 import { useAsync } from "./useAsync";
 
 const STARTER = `import streamlit as st
@@ -62,6 +62,7 @@ function Form({ id, initial, onDone }: { id?: string; initial: AppInput; onDone:
         <input type="checkbox" checked={form.shared} onChange={(e) => set("shared", e.target.checked)} />
         <span>Shared with workspace members (otherwise only workspace owners can open it)</span>
       </label>
+      {form.shared && <p className="text-sm text-gray-600 dark:text-gray-400">{SHARED_DATA_WORDING}</p>}
       <label className="block space-y-1 text-sm">
         <span>Python source</span>
         <textarea className={`${field} h-80 font-mono`} spellCheck={false} value={form.source} onChange={(e) => set("source", e.target.value)} />

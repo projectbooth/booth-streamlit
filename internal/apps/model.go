@@ -38,11 +38,20 @@ type App struct {
 	// member who may open the app wakes it.
 	Suspended bool `json:"suspended"`
 	// GateBearer is the per-app secret for the app pod's gate (design note (b)). Never serialized.
-	GateBearer string    `json:"-"`
-	CreatedBy  string    `json:"createdBy"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedBy  string    `json:"updatedBy"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	GateBearer string `json:"-"`
+	// Owner is whose read access the app uses for data (ADR 0104/0107): the creator, until a
+	// workspace owner takes it over.
+	Owner string `json:"owner"`
+	// DataPausedReason is set while core refuses to mint for Owner (data access paused); the app
+	// still runs.
+	DataPausedReason string     `json:"dataPausedReason,omitempty"`
+	DataPausedAt     *time.Time `json:"dataPausedAt,omitempty"`
+	// DataEpoch is on the pod template; bumping it rolls the pod.
+	DataEpoch int       `json:"-"`
+	CreatedBy string    `json:"createdBy"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedBy string    `json:"updatedBy"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Input is what an owner sets when creating or editing an app.
@@ -75,4 +84,6 @@ var (
 	ErrCapacity = errors.New("too many apps are running; stop one first")
 	// ErrStopped: the app's owner has stopped it; only an owner's Start brings it back.
 	ErrStopped = errors.New("this app is stopped")
+	// ErrNotPaused: take ownership is only for an app whose owner lost access (ADR 0107 item 7).
+	ErrNotPaused = errors.New("this app's owner still has access; take ownership is only for an app whose data access is paused")
 )

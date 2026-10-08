@@ -36,13 +36,17 @@ const maxBodyBytes = 1 << 20
 //	DELETE /api/apps/{id}           delete (owners)
 //	POST   /api/apps/{id}/start     desired state running (owners)
 //	POST   /api/apps/{id}/stop      desired state stopped (owners)
-func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service, status StatusFunc) {
+//	POST   /api/apps/{id}/take-ownership   become the app's owner while its data access is paused
+//	                                (owners; ADR 0107 item 7, logged)
+//	GET    /api/apps/{id}/ownership-changes   the app's recorded take-overs
+func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service, status StatusFunc, dataAccess bool) {
 	r.Route("/api", func(r chi.Router) {
 		r.Use(authenticate(v))
 		r.Get("/me", func(w http.ResponseWriter, r *http.Request) {
 			c := caller(r)
 			writeJSON(w, http.StatusOK, map[string]any{
 				"subject": c.Subject, "workspace": c.Workspace, "role": c.Role, "canAuthor": apps.CanAuthor(c),
+				"dataAccess": dataAccess,
 			})
 		})
 		r.Get("/apps", func(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +90,21 @@ func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service, status StatusFunc)
 		})
 		r.Post("/apps/{id}/start", setState(svc, status, apps.Running))
 		r.Post("/apps/{id}/stop", setState(svc, status, apps.Stopped))
+		r.Post("/apps/{id}/take-ownership", func(w http.ResponseWriter, r *http.Request) {
+			a, err := svc.TakeOwnership(r.Context(), caller(r), chi.URLParam(r, "id"))
+			respond(w, http.StatusOK, view(a, status), err)
+		})
+		r.Get("/apps/{id}/ownership-changes", func(w http.ResponseWriter, r *http.Request) {
+			changes, err := svc.OwnershipChanges(r.Context(), caller(r), chi.URLParam(r, "id"))
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			if changes == nil {
+				changes = []apps.OwnershipChange{}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"changes": changes})
+		})
 	})
 }
 
@@ -172,6 +191,8 @@ func writeErr(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "app not found"})
 	case errors.Is(err, apps.ErrForbidden):
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+	case errors.Is(err, apps.ErrNotPaused):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case errors.Is(err, apps.ErrCapacity):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case errors.Is(err, apps.ErrInvalid):

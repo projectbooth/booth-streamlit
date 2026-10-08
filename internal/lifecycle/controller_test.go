@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -404,5 +405,125 @@ func TestStore_DropsObservationsOlderThanTheLastChange(t *testing.T) {
 	r.c.store(fresh, map[string]Status{a.ID: {State: StateRunning}}, map[string]bool{a.ID: true})
 	if st := r.c.Status(mustGet(t, r, a.ID)); st.State != StateRunning {
 		t.Errorf("a current observation was dropped: %+v", st)
+	}
+}
+
+func dataRig(t *testing.T) *rig {
+	t.Helper()
+	r := newRig(t)
+	r.c.cfg.Data = &DataConfig{
+		TokenURL:     "http://booth-streamlit.booth-streamlit.svc:8081/internal/token",
+		BrokerURL:    "http://booth-streamlit.booth-streamlit.svc:8081/internal/broker",
+		SidecarImage: "ghcr.io/projectbooth/credential-sidecar@sha256:6a0a795efd27f165e0714beb163d91f5c2feff55cfdc6f287aee979ae02cce14",
+		Database:     true,
+	}
+	return r
+}
+
+// ADR 0107 item 1 / design-data-access item 2: the token volume is mounted into the gate (rw) and the
+// postgres sidecar (ro) and NEVER into the Streamlit container; the pod does not share process
+// namespaces; the sidecar asks for read only, on the app's own workspace, through the backend.
+func TestDeployment_DataAccessKeepsTheTokenAwayFromUserCode(t *testing.T) {
+	r := dataRig(t)
+	a := r.create("Sales")
+	r.reconcile()
+	d := r.deployment(a.ID)
+	spec := d.Spec.Template.Spec
+
+	if spec.ShareProcessNamespace != nil && *spec.ShareProcessNamespace {
+		t.Fatal("the pod shares process namespaces: user code could read the sidecar's /proc")
+	}
+	var tokenVol *corev1.Volume
+	for i := range spec.Volumes {
+		if spec.Volumes[i].Name == "token" {
+			tokenVol = &spec.Volumes[i]
+		}
+	}
+	if tokenVol == nil || tokenVol.EmptyDir == nil || tokenVol.EmptyDir.Medium != corev1.StorageMediumMemory {
+		t.Fatalf("token volume %+v: want a memory-backed emptyDir", tokenVol)
+	}
+	mounts := map[string]string{}
+	for _, c := range spec.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == "token" {
+				mode := "rw"
+				if m.ReadOnly {
+					mode = "ro"
+				}
+				mounts[c.Name] = mode
+			}
+		}
+		for _, e := range c.Env {
+			if strings.Contains(strings.ToLower(e.Name), "token") && c.Name != "gate" {
+				t.Errorf("%s has env %s", c.Name, e.Name)
+			}
+		}
+	}
+	if want := map[string]string{"gate": "rw", "pg-sidecar": "ro"}; !reflect.DeepEqual(mounts, want) {
+		t.Fatalf("token volume mounted into %v, want exactly %v (never the streamlit container)", mounts, want)
+	}
+
+	pg := container(t, d, "pg-sidecar")
+	want := []string{
+		"--kind=postgres", "--access=read", `--scope={"workspace":"acme"}`, "--workspace=acme",
+		"--token-file=/var/run/booth/token/token", "--listen=127.0.0.1:5432",
+		"--core-url=http://booth-streamlit.booth-streamlit.svc:8081/internal/broker",
+	}
+	if !reflect.DeepEqual(pg.Args, want) {
+		t.Errorf("pg-sidecar args\n got %v\nwant %v", pg.Args, want)
+	}
+	if len(pg.Env) != 0 {
+		t.Errorf("pg-sidecar has env %v; everything it needs is a flag", pg.Env)
+	}
+	if !strings.Contains(pg.Image, "@sha256:") {
+		t.Error("sidecar image is not digest-pinned")
+	}
+	st := container(t, d, "streamlit")
+	env := map[string]string{}
+	for _, e := range st.Env {
+		env[e.Name] = e.Value
+	}
+	if env["DATABASE_URL"] != "postgresql://localhost:5432/"+WorkspaceDatabase("acme") {
+		t.Errorf("DATABASE_URL = %q", env["DATABASE_URL"])
+	}
+	if env["BOOTH_DATA_STATUS_URL"] != "http://127.0.0.1:8090/_booth/data/status" {
+		t.Errorf("status URL %q", env["BOOTH_DATA_STATUS_URL"])
+	}
+	if WorkspaceDatabase("acme") != "bdb_ws_"+WorkspaceDatabase("acme")[7:] || len(WorkspaceDatabase("acme")) != 31 {
+		t.Errorf("database name %q", WorkspaceDatabase("acme"))
+	}
+}
+
+// A refused renewal bumps the app's data epoch; the pod template changes, so the pod rolls and
+// Postgres connections opened under the old lease end (ADR 0107 item 6).
+func TestDeployment_DataEpochRollsThePod(t *testing.T) {
+	r := dataRig(t)
+	a := r.create("Sales")
+	r.reconcile()
+	before := r.deployment(a.ID).Spec.Template.Annotations[annoDataEpoch]
+	cur, _ := r.svc.Get(r.ctx, owner, a.ID)
+	if _, err := r.svc.DataPaused(r.ctx, cur, "owner gone"); err != nil {
+		t.Fatal(err)
+	}
+	r.reconcile()
+	if after := r.deployment(a.ID).Spec.Template.Annotations[annoDataEpoch]; after == before {
+		t.Fatalf("data epoch annotation unchanged (%s): the pod would keep its open connections", after)
+	}
+}
+
+// Without data access configured, app pods get none of it.
+func TestDeployment_NoDataAccessByDefault(t *testing.T) {
+	r := newRig(t)
+	a := r.create("Sales")
+	r.reconcile()
+	for _, c := range r.deployment(a.ID).Spec.Template.Spec.Containers {
+		if c.Name == "pg-sidecar" {
+			t.Fatal("pg-sidecar without data access")
+		}
+		for _, e := range c.Env {
+			if e.Name == "DATABASE_URL" || e.Name == "BOOTH_GATE_TOKEN_URL" {
+				t.Errorf("%s set without data access", e.Name)
+			}
+		}
 	}
 }

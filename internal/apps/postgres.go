@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,12 +27,12 @@ func NewPostgresStore(ctx context.Context, pool *pgxpool.Pool) (*PostgresStore, 
 	return &PostgresStore{pool: pool}, nil
 }
 
-const cols = `id, workspace, name, description, source, shared, desired_state, suspended, gate_bearer, created_by, created_at, updated_by, updated_at`
+const cols = `id, workspace, name, description, source, shared, desired_state, suspended, gate_bearer, owner, data_paused_reason, data_paused_at, data_epoch, created_by, created_at, updated_by, updated_at`
 
 func scanApp(row pgx.Row) (App, error) {
 	var a App
 	var st string
-	if err := row.Scan(&a.ID, &a.Workspace, &a.Name, &a.Description, &a.Source, &a.Shared, &st, &a.Suspended, &a.GateBearer, &a.CreatedBy, &a.CreatedAt, &a.UpdatedBy, &a.UpdatedAt); err != nil {
+	if err := row.Scan(&a.ID, &a.Workspace, &a.Name, &a.Description, &a.Source, &a.Shared, &st, &a.Suspended, &a.GateBearer, &a.Owner, &a.DataPausedReason, &a.DataPausedAt, &a.DataEpoch, &a.CreatedBy, &a.CreatedAt, &a.UpdatedBy, &a.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return App{}, ErrNotFound
 		}
@@ -39,6 +40,10 @@ func scanApp(row pgx.Row) (App, error) {
 	}
 	a.DesiredState = DesiredState(st)
 	a.CreatedAt, a.UpdatedAt = a.CreatedAt.UTC(), a.UpdatedAt.UTC()
+	if a.DataPausedAt != nil {
+		t := a.DataPausedAt.UTC()
+		a.DataPausedAt = &t
+	}
 	return a, nil
 }
 
@@ -66,8 +71,9 @@ func (s *PostgresStore) Get(ctx context.Context, workspace, id string) (App, err
 }
 
 func (s *PostgresStore) Create(ctx context.Context, a App) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO apps (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-		a.ID, a.Workspace, a.Name, a.Description, a.Source, a.Shared, string(a.DesiredState), a.Suspended, a.GateBearer, a.CreatedBy, a.CreatedAt, a.UpdatedBy, a.UpdatedAt)
+	_, err := s.pool.Exec(ctx, `INSERT INTO apps (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		a.ID, a.Workspace, a.Name, a.Description, a.Source, a.Shared, string(a.DesiredState), a.Suspended, a.GateBearer,
+		a.Owner, a.DataPausedReason, a.DataPausedAt, a.DataEpoch, a.CreatedBy, a.CreatedAt, a.UpdatedBy, a.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("creating app: %w", err)
 	}
@@ -128,6 +134,69 @@ func (s *PostgresStore) Delete(ctx context.Context, workspace, id string) error 
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *PostgresStore) GetByBearer(ctx context.Context, bearer string) (App, error) {
+	if bearer == "" {
+		return App{}, ErrNotFound
+	}
+	return scanApp(s.pool.QueryRow(ctx, `SELECT `+cols+` FROM apps WHERE gate_bearer = $1`, bearer))
+}
+
+func (s *PostgresStore) SetDataPaused(ctx context.Context, workspace, id, reason string, at time.Time, bumpEpoch bool) (App, error) {
+	var pausedAt *time.Time
+	if reason != "" {
+		pausedAt = &at
+	}
+	bump := 0
+	if bumpEpoch {
+		bump = 1
+	}
+	return scanApp(s.pool.QueryRow(ctx, `UPDATE apps SET data_paused_reason = $3, data_paused_at = $4, data_epoch = data_epoch + $5
+		WHERE workspace = $1 AND id = $2 RETURNING `+cols, workspace, id, reason, pausedAt, bump))
+}
+
+func (s *PostgresStore) TakeOwnership(ctx context.Context, workspace, id, newOwner, reason string, at time.Time) (string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("starting transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
+	var prev string
+	err = tx.QueryRow(ctx, `SELECT owner FROM apps WHERE workspace = $1 AND id = $2 FOR UPDATE`, workspace, id).Scan(&prev)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading owner: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE apps SET owner = $3, data_paused_reason = '', data_paused_at = NULL WHERE workspace = $1 AND id = $2`, workspace, id, newOwner); err != nil {
+		return "", fmt.Errorf("setting owner: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO app_ownership_changes (app_id, workspace, previous_owner, new_owner, reason, at) VALUES ($1,$2,$3,$4,$5,$6)`,
+		id, workspace, prev, newOwner, reason, at); err != nil {
+		return "", fmt.Errorf("recording the change: %w", err)
+	}
+	return prev, tx.Commit(ctx)
+}
+
+func (s *PostgresStore) OwnershipChanges(ctx context.Context, workspace, id string) ([]OwnershipChange, error) {
+	rows, err := s.pool.Query(ctx, `SELECT app_id, workspace, previous_owner, new_owner, reason, at FROM app_ownership_changes
+		WHERE workspace = $1 AND app_id = $2 ORDER BY at`, workspace, id)
+	if err != nil {
+		return nil, fmt.Errorf("listing ownership changes: %w", err)
+	}
+	defer rows.Close()
+	var out []OwnershipChange
+	for rows.Next() {
+		var c OwnershipChange
+		if err := rows.Scan(&c.AppID, &c.Workspace, &c.PreviousOwner, &c.NewOwner, &c.Reason, &c.At); err != nil {
+			return nil, err
+		}
+		c.At = c.At.UTC()
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 func (s *PostgresStore) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }

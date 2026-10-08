@@ -11,3 +11,8 @@ spec:
     - name: http
       port: {{ .Values.service.port }}
       targetPort: http
+    {{- if .Values.dataAccess.enabled }}
+    - name: internal
+      port: 8081
+      targetPort: internal
+    {{- end }}

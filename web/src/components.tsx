@@ -12,6 +12,9 @@ export function TrustNote() {
   );
 }
 
+/** ADR 0107 item 4: what a shared app can read, in plain words. */
+export const SHARED_DATA_WORDING = "This app can read any data you can read in this workspace.";
+
 export function ErrorText({ error }: { error: Error }) {
   const msg = error instanceof ApiError && error.status === 403 ? "Only workspace owners can do that." : error.message;
   return <p role="alert" className="text-sm text-red-700 dark:text-red-400">{msg}</p>;

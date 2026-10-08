@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Store persists apps. Every method is workspace-scoped: an app in another workspace is
@@ -25,14 +26,35 @@ type Store interface {
 	// ListAll returns every app in every workspace, with Source and GateBearer, for the lifecycle
 	// reconciler. Nothing user-facing may call it.
 	ListAll(ctx context.Context) ([]App, error)
+	// GetByBearer finds the app whose gate presents bearer, in any workspace: the bearer is the
+	// app's identity on the backend's internal port. ErrNotFound for anything else.
+	GetByBearer(ctx context.Context, bearer string) (App, error)
+	// SetDataPaused records (reason != "") or clears (reason == "") a data-access pause; bumpEpoch
+	// also bumps DataEpoch so the pod rolls. It returns the app as stored.
+	SetDataPaused(ctx context.Context, workspace, id, reason string, at time.Time, bumpEpoch bool) (App, error)
+	// TakeOwnership sets Owner to newOwner, clears any pause and records the change, atomically.
+	TakeOwnership(ctx context.Context, workspace, id, newOwner, reason string, at time.Time) (previous string, err error)
+	// OwnershipChanges lists an app's recorded take-overs, oldest first.
+	OwnershipChanges(ctx context.Context, workspace, id string) ([]OwnershipChange, error)
 	Delete(ctx context.Context, workspace, id string) error
 	Ping(ctx context.Context) error
 }
 
+// OwnershipChange is one recorded take-over (ADR 0107 item 7).
+type OwnershipChange struct {
+	AppID         string    `json:"appId"`
+	Workspace     string    `json:"workspace"`
+	PreviousOwner string    `json:"previousOwner"`
+	NewOwner      string    `json:"newOwner"`
+	Reason        string    `json:"reason"`
+	At            time.Time `json:"at"`
+}
+
 // MemoryStore is a Store held in process memory, for tests.
 type MemoryStore struct {
-	mu   sync.Mutex
-	apps map[string]App // by id
+	mu      sync.Mutex
+	apps    map[string]App // by id
+	changes []OwnershipChange
 }
 
 // NewMemoryStore returns an empty MemoryStore.
@@ -132,6 +154,67 @@ func (m *MemoryStore) Delete(_ context.Context, workspace, id string) error {
 	}
 	delete(m.apps, id)
 	return nil
+}
+
+func (m *MemoryStore) GetByBearer(_ context.Context, bearer string) (App, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if bearer == "" {
+		return App{}, ErrNotFound
+	}
+	for _, a := range m.apps {
+		if a.GateBearer == bearer {
+			return a, nil
+		}
+	}
+	return App{}, ErrNotFound
+}
+
+func (m *MemoryStore) SetDataPaused(_ context.Context, workspace, id, reason string, at time.Time, bumpEpoch bool) (App, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.apps[id]
+	if !ok || cur.Workspace != workspace {
+		return App{}, ErrNotFound
+	}
+	cur.DataPausedReason = reason
+	if reason == "" {
+		cur.DataPausedAt = nil
+	} else {
+		t := at
+		cur.DataPausedAt = &t
+	}
+	if bumpEpoch {
+		cur.DataEpoch++
+	}
+	m.apps[id] = cur
+	return cur, nil
+}
+
+func (m *MemoryStore) TakeOwnership(_ context.Context, workspace, id, newOwner, reason string, at time.Time) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.apps[id]
+	if !ok || cur.Workspace != workspace {
+		return "", ErrNotFound
+	}
+	prev := cur.Owner
+	cur.Owner, cur.DataPausedReason, cur.DataPausedAt = newOwner, "", nil
+	m.apps[id] = cur
+	m.changes = append(m.changes, OwnershipChange{AppID: id, Workspace: workspace, PreviousOwner: prev, NewOwner: newOwner, Reason: reason, At: at})
+	return prev, nil
+}
+
+func (m *MemoryStore) OwnershipChanges(_ context.Context, workspace, id string) ([]OwnershipChange, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []OwnershipChange
+	for _, c := range m.changes {
+		if c.AppID == id && c.Workspace == workspace {
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 func (m *MemoryStore) Ping(context.Context) error { return nil }

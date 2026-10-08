@@ -103,9 +103,42 @@ apps:
       namespaceSelector: {kubernetes.io/metadata.name: kube-system}
       podSelector: {k8s-app: kube-dns}
 
+# Data access (ADR 0104/0107; docs/design-data-access.md): an app reads data as its owner, capped at
+# viewer. Off by default. Turning it on:
+#   - declares `workloadIdentity: {mint: true}` on the manifest, so booth-core delivers the
+#     booth-workload-minting-credentials Secret this module mints each app's token with;
+#   - opens the backend's internal port (8081) to app pods only: each app's gate fetches the token
+#     there with its bearer, and the credential sidecars send their broker calls there, so app pods
+#     never need a route to booth-core;
+#   - with dataAccess.database.enabled, adds booth-core's credential sidecar (postgres mode, read
+#     only, the app's own workspace) to every app pod and gives the app DATABASE_URL.
+# An app can read what its owner, capped at viewer, can read in its workspace (ADR 0107 item 4).
+dataAccess:
+  enabled: false
+  # booth-core's in-cluster address, for the broker (POST /api/credentials).
+  coreUrl: http://booth-core.booth-system.svc:8080
+  # booth-core's credential sidecar (ADR 0095), digest-pinned: the same digest booth-api,
+  # booth-notebooks and booth-pipeline pin.
+  sidecar:
+    image: ghcr.io/projectbooth/credential-sidecar@sha256:6a0a795efd27f165e0714beb163d91f5c2feff55cfdc6f287aee979ae02cce14
+    resources:
+      requests: {cpu: 10m, memory: 16Mi}
+      limits: {cpu: 100m, memory: 64Mi, ephemeral-storage: 16Mi}
+  database:
+    # booth-database is installed: app pods get the postgres sidecar and DATABASE_URL, and an egress
+    # rule to booth-database's Postgres pod (match your install's namespace).
+    enabled: false
+    egress:
+      namespaceSelector: {kubernetes.io/metadata.name: booth-database}
+      podSelector: {app.kubernetes.io/name: booth-database, app.kubernetes.io/component: postgres}
+      port: 5432
+  # Test knob: re-mint tokens and re-fetch them in app pods at least this often (e.g. 20s), so a lost
+  # owner is noticed in seconds. Empty (the default): two thirds of a token's life (~6.7 minutes).
+  refreshMax: ""
+
 # A ResourceQuota on this namespace, as a backstop below the running-app cap. The defaults fit
-# apps.maxRunning=5 with the default per-app limits, plus the backend and room for one pod being
-# replaced.
+# apps.maxRunning=5 with the default per-app limits (including the data-access sidecar), plus the
+# backend and room for one pod being replaced.
 quota:
   enabled: true
   hard:

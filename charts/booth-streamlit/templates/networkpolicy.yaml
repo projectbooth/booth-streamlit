@@ -36,6 +36,29 @@ spec:
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
+    {{- if .Values.dataAccess.enabled }}
+    # The backend's internal port: the gate's token refresh and the sidecars' broker calls
+    # (ADR 0107). App pods have no route to booth-core itself.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "booth-streamlit.selectorLabels" . | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: 8081}
+    {{- if .Values.dataAccess.database.enabled }}
+    # booth-database's Postgres, for the postgres sidecar. NetworkPolicy is per pod, so user code
+    # can reach this port too; it holds no credential for it (ADR 0107 item 3).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.dataAccess.database.egress.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.dataAccess.database.egress.podSelector | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.dataAccess.database.egress.port }}}
+    {{- end }}
+    {{- end }}
     {{- if eq .Values.apps.egress.mode "open" }}
     - to:
         - ipBlock:
@@ -44,3 +67,28 @@ spec:
     {{- else if ne .Values.apps.egress.mode "closed" }}
     {{- fail "apps.egress.mode must be open or closed (ADR 0104)" }}
     {{- end }}
+{{- if .Values.dataAccess.enabled }}
+---
+# The backend's own ingress, once it has an internal port: the module port (8080) stays open to
+# booth-core's gateway and iframe proxy as before; the internal port (8081) admits app pods only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "booth-streamlit.fullname" . }}-backend
+  labels:
+    {{- include "booth-streamlit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "booth-streamlit.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {protocol: TCP, port: 8080}
+    - from:
+        - podSelector:
+            matchLabels:
+              booth.projectbooth.io/component: app
+      ports:
+        - {protocol: TCP, port: 8081}
+{{- end }}

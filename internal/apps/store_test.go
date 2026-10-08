@@ -132,3 +132,53 @@ func TestStores(t *testing.T) {
 		})
 	}
 }
+
+func TestStores_DataAccess(t *testing.T) {
+	for name, s := range stores(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			a := app("d1", "acme", "x", true)
+			a.Owner = "alice"
+			b := app("d2", "other", "y", true)
+			b.Owner = "bob"
+			for _, x := range []App{a, b} {
+				if err := s.Create(ctx, x); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got, err := s.GetByBearer(ctx, "bearer-d2"); err != nil || got.ID != "d2" || got.Workspace != "other" {
+				t.Fatalf("GetByBearer: %+v %v", got, err)
+			}
+			for _, bad := range []string{"", "bearer-", "BEARER-D1", "bearer-d1 "} {
+				if _, err := s.GetByBearer(ctx, bad); !errors.Is(err, ErrNotFound) {
+					t.Errorf("GetByBearer(%q): %v", bad, err)
+				}
+			}
+
+			at := time.Date(2026, 10, 8, 13, 0, 0, 0, time.UTC)
+			p, err := s.SetDataPaused(ctx, "acme", "d1", "owner gone", at, true)
+			if err != nil || p.DataPausedReason != "owner gone" || p.DataPausedAt == nil || !p.DataPausedAt.Equal(at) || p.DataEpoch != 1 {
+				t.Fatalf("SetDataPaused: %+v %v", p, err)
+			}
+			if _, err := s.SetDataPaused(ctx, "acme", "d2", "x", at, false); !errors.Is(err, ErrNotFound) {
+				t.Errorf("SetDataPaused across workspaces: %v", err)
+			}
+
+			prev, err := s.TakeOwnership(ctx, "acme", "d1", "carol", "owner gone", at)
+			if err != nil || prev != "alice" {
+				t.Fatalf("TakeOwnership: %q %v", prev, err)
+			}
+			got, _ := s.Get(ctx, "acme", "d1")
+			if got.Owner != "carol" || got.DataPausedReason != "" || got.DataPausedAt != nil {
+				t.Errorf("after take-over: %+v", got)
+			}
+			if _, err := s.TakeOwnership(ctx, "acme", "d2", "carol", "", at); !errors.Is(err, ErrNotFound) {
+				t.Errorf("TakeOwnership across workspaces: %v", err)
+			}
+			ch, err := s.OwnershipChanges(ctx, "acme", "d1")
+			if err != nil || len(ch) != 1 || ch[0].PreviousOwner != "alice" || ch[0].NewOwner != "carol" || ch[0].Reason != "owner gone" || !ch[0].At.Equal(at) {
+				t.Errorf("OwnershipChanges: %+v %v", ch, err)
+			}
+		})
+	}
+}

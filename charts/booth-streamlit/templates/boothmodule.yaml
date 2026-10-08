@@ -38,6 +38,14 @@ spec:
     publish:
       - dashboard.*
   {{- end }}
+  {{- if .Values.dataAccess.enabled }}
+  # ADR 0056/0058: this module mints one workload token per app (owner = the app's owner,
+  # roleCeiling viewer, subject streamlit:<workspace>:<appId>; ADR 0107). booth-core refuses unless the
+  # owner currently holds a role in that workspace and was seen recently (its
+  # internal/workload/service.go, ownerRole, re-read before declaring this).
+  workloadIdentity:
+    mint: true
+  {{- end }}
   serviceRef:
     name: {{ include "booth-streamlit.fullname" . }}
     port: {{ .Values.service.port }}

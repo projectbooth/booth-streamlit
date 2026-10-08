@@ -1,3 +1,6 @@
 # Pinned: a new Streamlit changes how its frontend resolves base paths and websockets, which the
 # module's proxy depends on. Bump deliberately and re-run the integration browser test.
 streamlit==1.64.0
+# DATABASE_URL (the postgres credential sidecar on loopback, ADR 0107) works with any Postgres
+# client; psycopg 3 is the one the image ships.
+psycopg[binary]==3.3.6

@@ -12,6 +12,8 @@ var allVars = []string{
 	"BOOTH_NAMESPACE", "BOOTH_SELF_DEPLOYMENT", "BOOTH_APP_RUNTIME_IMAGE", "BOOTH_APP_GATE_IMAGE", "BOOTH_APP_SERVICE_ACCOUNT",
 	"BOOTH_APP_IMAGE_PULL_POLICY", "BOOTH_APP_RESOURCES", "BOOTH_APP_GATE_RESOURCES", "BOOTH_APP_TMP_SIZE_LIMIT",
 	"BOOTH_APP_IDLE_TIMEOUT", "BOOTH_APP_MAX_WEBSOCKET", "BOOTH_APP_MAX_RUNNING", "BOOTH_APP_MAX_RUNNING_PER_WORKSPACE",
+	"BOOTH_DATA_ACCESS", "BOOTH_WORKLOAD_MINT_URL", "BOOTH_WORKLOAD_MINT_CREDENTIAL", "BOOTH_CORE_URL", "BOOTH_INTERNAL_ADDR",
+	"BOOTH_INTERNAL_URL", "BOOTH_APP_SIDECAR_IMAGE", "BOOTH_APP_SIDECAR_RESOURCES", "BOOTH_APP_DATABASE", "BOOTH_DATA_REFRESH_MAX",
 }
 
 // minimal is the smallest valid environment.
@@ -140,5 +142,51 @@ func TestLoad_ZeroIdleTimeoutDisablesIdleShutdown(t *testing.T) {
 	cfg, err := Load()
 	if err != nil || cfg.Lifecycle.IdleTimeout != 0 {
 		t.Fatalf("%v %v", cfg.Lifecycle.IdleTimeout, err)
+	}
+}
+
+func dataEnv() map[string]string {
+	return with(map[string]string{
+		"BOOTH_DATA_ACCESS":              "true",
+		"BOOTH_WORKLOAD_MINT_URL":        "http://core/api/internal/workload-tokens",
+		"BOOTH_WORKLOAD_MINT_CREDENTIAL": "cred",
+		"BOOTH_CORE_URL":                 "http://core:8080",
+		"BOOTH_INTERNAL_URL":             "http://booth-streamlit.ns.svc:8081",
+		"BOOTH_APP_SIDECAR_IMAGE":        "ghcr.io/projectbooth/credential-sidecar@sha256:6a0a",
+	})
+}
+
+func TestLoad_DataAccess(t *testing.T) {
+	setEnv(t, minimal())
+	if cfg, err := Load(); err != nil || cfg.Data.Enabled {
+		t.Fatalf("data access must be off unless asked for: %+v %v", cfg.Data, err)
+	}
+
+	env := dataEnv()
+	env["BOOTH_APP_DATABASE"] = "true"
+	env["BOOTH_DATA_REFRESH_MAX"] = "20s"
+	setEnv(t, env)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := cfg.Data
+	if !d.Enabled || !d.Database || d.InternalAddr != ":8081" || d.RefreshMax != 20*time.Second || d.MintCredential != "cred" {
+		t.Errorf("data config %+v", d)
+	}
+
+	for _, name := range []string{"BOOTH_WORKLOAD_MINT_URL", "BOOTH_WORKLOAD_MINT_CREDENTIAL", "BOOTH_CORE_URL", "BOOTH_INTERNAL_URL", "BOOTH_APP_SIDECAR_IMAGE"} {
+		env := dataEnv()
+		delete(env, name)
+		setEnv(t, env)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("without %s: %v", name, err)
+		}
+	}
+	env = dataEnv()
+	env["BOOTH_APP_SIDECAR_IMAGE"] = "ghcr.io/projectbooth/credential-sidecar:latest"
+	setEnv(t, env)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "digest-pinned") {
+		t.Errorf("a tag-pinned sidecar image was accepted: %v", err)
 	}
 }

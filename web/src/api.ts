@@ -10,6 +10,8 @@ export interface Me {
   workspace: string;
   role: Role;
   canAuthor: boolean;
+  /** Whether this install gives apps data access at all (ADR 0104/0107). */
+  dataAccess: boolean;
 }
 
 export interface App {
@@ -21,6 +23,10 @@ export interface App {
   shared: boolean;
   desiredState: "running" | "stopped";
   suspended: boolean;
+  /** Whose read access the app uses for data, capped at viewer (ADR 0104). */
+  owner: string;
+  /** Set while core refuses to mint for the owner: the app runs, its data doesn't. */
+  dataPausedReason?: string;
   /** What the lifecycle observes (internal/lifecycle). */
   status: { state: "stopped" | "suspended" | "starting" | "running" | "failed"; reason?: string };
   createdBy: string;
@@ -65,6 +71,7 @@ export const api = {
   update: (id: string, input: AppInput) => call<App>("PUT", `api/apps/${encodeURIComponent(id)}`, input),
   remove: (id: string) => call<void>("DELETE", `api/apps/${encodeURIComponent(id)}`),
   start: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/start`),
+  takeOwnership: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/take-ownership`),
   stop: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/stop`),
 };
 
