@@ -30,6 +30,11 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            {{- if .Values.dataAccess.enabled }}
+            # The internal port: app pods only (networkpolicy.yaml), never through booth-core.
+            - name: internal
+              containerPort: 8081
+            {{- end }}
           env:
             - name: BOOTH_HTTP_ADDR
               value: ":8080"
@@ -65,6 +70,35 @@ spec:
               value: {{ .Values.apps.idleTimeout | quote }}
             - name: BOOTH_APP_MAX_WEBSOCKET
               value: {{ .Values.apps.maxWebsocket | quote }}
+            {{- if .Values.dataAccess.enabled }}
+            # Data access (ADR 0104/0107).
+            - name: BOOTH_DATA_ACCESS
+              value: "true"
+            # booth-core writes this Secret once the manifest declares workloadIdentity.mint. Not
+            # optional: without it the backend can't give any app data, so it waits for it.
+            - name: BOOTH_WORKLOAD_MINT_URL
+              valueFrom:
+                secretKeyRef: {name: booth-workload-minting-credentials, key: url}
+            - name: BOOTH_WORKLOAD_MINT_CREDENTIAL
+              valueFrom:
+                secretKeyRef: {name: booth-workload-minting-credentials, key: credential}
+            - name: BOOTH_CORE_URL
+              value: {{ required "dataAccess.coreUrl is required with dataAccess.enabled" .Values.dataAccess.coreUrl | quote }}
+            - name: BOOTH_INTERNAL_ADDR
+              value: ":8081"
+            - name: BOOTH_INTERNAL_URL
+              value: "http://{{ include "booth-streamlit.fullname" . }}.{{ .Release.Namespace }}.svc:8081"
+            - name: BOOTH_APP_SIDECAR_IMAGE
+              value: {{ .Values.dataAccess.sidecar.image | quote }}
+            - name: BOOTH_APP_SIDECAR_RESOURCES
+              value: {{ .Values.dataAccess.sidecar.resources | toJson | quote }}
+            - name: BOOTH_APP_DATABASE
+              value: {{ .Values.dataAccess.database.enabled | quote }}
+            {{- with .Values.dataAccess.refreshMax }}
+            - name: BOOTH_DATA_REFRESH_MAX
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             - name: BOOTH_POSTGRES_DSN
               valueFrom:
                 secretKeyRef:

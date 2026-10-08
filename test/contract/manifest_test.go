@@ -192,7 +192,12 @@ func TestChart_OwnDatabase(t *testing.T) {
 // unchanged from booth-core's chart into test/integration/fixtures). The API server silently
 // prunes unknown fields, so a misspelled or not-yet-supported field would vanish without error,
 // which is how a module ends up with no event-bus credential and no clue why.
-func TestManifest_EveryFieldIsInCoresCRD(t *testing.T) {
+func TestManifest_EveryFieldIsInCoresCRD(t *testing.T) { checkFieldsInCoresCRD(t) }
+
+// checkFieldsInCoresCRD renders the BoothModule with the given values and checks every spec field
+// against core's CRD.
+func checkFieldsInCoresCRD(t *testing.T, extra ...string) {
+	t.Helper()
 	crdBytes, err := os.ReadFile(filepath.Join("..", "integration", "fixtures", "boothmodule-crd.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +237,7 @@ func TestManifest_EveryFieldIsInCoresCRD(t *testing.T) {
 	var rendered struct {
 		Spec map[string]any `yaml:"spec"`
 	}
-	if err := yaml.Unmarshal(helmTemplate(t, "templates/boothmodule.yaml"), &rendered); err != nil {
+	if err := yaml.Unmarshal(helmTemplate(t, "templates/boothmodule.yaml", extra...), &rendered); err != nil {
 		t.Fatal(err)
 	}
 	var fields []string

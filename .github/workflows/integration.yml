@@ -45,10 +45,13 @@ jobs:
   real-core:
     # The install path a user actually takes: booth-core provisions the database and mints the
     # bus credential from this chart's BoothModule. booth-core is built at a pinned commit, not its
-    # moving main (contracts/testing-strategy.md); bump CORE_REF deliberately.
+    # moving main (contracts/testing-strategy.md); bump CORE_REF deliberately. booth-database
+    # (ADR 0081) is the real workspace database the data-access checks read; DATABASE_REF is the
+    # commit booth-api's realstack test pins.
     runs-on: ubuntu-24.04
     env:
       CORE_REF: 9e2999948079b55d19493aab72718e10940b9803
+      DATABASE_REF: bdab4b82dc662ab4bb4afa9d3084b0b765943eae
     steps:
       - uses: actions/checkout@v4
 
@@ -58,24 +61,31 @@ jobs:
           ref: ${{ env.CORE_REF }}
           path: booth-core
 
+      - uses: actions/checkout@v4
+        with:
+          repository: projectbooth/booth-database
+          ref: ${{ env.DATABASE_REF }}
+          path: booth-database
+
       - uses: helm/kind-action@v1
         with:
           cluster_name: booth-streamlit-realcore
 
       - uses: azure/setup-helm@v4
 
-      - name: Build and load booth-core, booth-streamlit and app-runtime images
+      - name: Build and load booth-core, booth-database, booth-streamlit and app-runtime images
         run: |
           # dependency build (not update) installs exactly what core's Chart.lock pins.
           helm repo add nats https://nats-io.github.io/k8s/helm/charts/
           helm dependency build booth-core/charts/booth-core
           docker build -t booth-core:ci booth-core
+          docker build -t booth-database:ci booth-database
           docker build -t booth-streamlit:ci .
           docker build -t booth-streamlit-app-runtime:ci -f images/app-runtime/Dockerfile .
-          kind load docker-image booth-core:ci booth-streamlit:ci booth-streamlit-app-runtime:ci --name booth-streamlit-realcore
+          kind load docker-image booth-core:ci booth-database:ci booth-streamlit:ci booth-streamlit-app-runtime:ci --name booth-streamlit-realcore
 
-      - name: Deploy Keycloak, booth-core and booth-streamlit (lifecycle test values)
-        run: test/integration/deploy-realcore.sh booth-core booth-core:ci booth-streamlit:ci booth-streamlit-app-runtime:ci
+      - name: Deploy Keycloak, booth-core, booth-database and booth-streamlit (lifecycle and data-access test values)
+        run: test/integration/deploy-realcore.sh booth-core booth-core:ci booth-streamlit:ci booth-streamlit-app-runtime:ci booth-database booth-database:ci
 
       - name: Verify (including the REAL_CORE checks)
         env:
@@ -97,6 +107,9 @@ jobs:
       - name: "Lifecycle: start (and Chromium through core), gate, cap, idle, stop, reconcile"
         run: test/integration/lifecycle.sh
 
+      - name: "Data access (ADR 0107): reads as owner, token unreadable, stolen bearer, viewer cap, lost owner, take ownership"
+        run: test/integration/data-access.sh
+
       - name: Dump state on failure
         if: failure()
         run: |
@@ -110,3 +123,7 @@ jobs:
           kubectl -n booth-streamlit logs -l booth.projectbooth.io/component=app --all-containers --tail=80 || true
           kubectl -n booth-streamlit get events --sort-by=.lastTimestamp | tail -40 || true
           cat /tmp/booth-core-port-forward.log || true
+          kubectl -n booth-database get pods || true
+          kubectl -n booth-database logs deploy/db-booth-database --tail=80 || true
+          kubectl -n booth-streamlit logs -l booth.projectbooth.io/component=app -c pg-sidecar --tail=80 || true
+          kubectl -n booth-system logs deploy/booth-core --tail=200 | grep -E "workload identity|credential" || true

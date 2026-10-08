@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, appURL, type App as BoothApp, type Me } from "./api";
 import { AppEditor } from "./AppEditor";
-import { ErrorText, TrustNote } from "./components";
+import { ErrorText, SHARED_DATA_WORDING, TrustNote } from "./components";
 import { useAsync } from "./useAsync";
 
 // One page, no client-side routes: every API URL is relative to this page's own path, so it must
@@ -63,7 +63,7 @@ function AppList({ me, onNew, onEdit }: { me: Me; onNew: () => void; onEdit: (id
       {list.status === "success" && list.data.length > 0 && (
         <ul className="divide-y divide-gray-200 rounded border border-gray-200 dark:divide-gray-800 dark:border-gray-800">
           {list.data.map((a) => (
-            <AppRow key={a.id} app={a} canAuthor={me.canAuthor} onEdit={() => onEdit(a.id)} act={act} />
+            <AppRow key={a.id} app={a} me={me} onEdit={() => onEdit(a.id)} act={act} />
           ))}
         </ul>
       )}
@@ -80,8 +80,10 @@ const STATE_LABELS: Record<BoothApp["status"]["state"], string> = {
   failed: "Failed",
 };
 
-function AppRow({ app, canAuthor, onEdit, act }: { app: BoothApp; canAuthor: boolean; onEdit: () => void; act: (fn: () => Promise<unknown>) => void }) {
+function AppRow({ app, me, onEdit, act }: { app: BoothApp; me: Me; onEdit: () => void; act: (fn: () => Promise<unknown>) => void }) {
+  const canAuthor = me.canAuthor;
   const running = app.desiredState === "running";
+  const paused = Boolean(app.dataPausedReason);
   const label = STATE_LABELS[app.status?.state ?? (running ? "starting" : "stopped")];
   return (
     <li className="flex items-center justify-between gap-4 px-4 py-3">
@@ -94,8 +96,23 @@ function AppRow({ app, canAuthor, onEdit, act }: { app: BoothApp; canAuthor: boo
               {app.shared ? "Shared with workspace" : "Owners only"}
             </span>
           )}
+          {me.dataAccess && paused && (
+            <span className="rounded bg-amber-100 px-1.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">Data access paused</span>
+          )}
         </div>
         {app.description && <p className="truncate text-sm text-gray-600 dark:text-gray-400">{app.description}</p>}
+        {me.dataAccess && (
+          <p className="text-xs text-gray-600 dark:text-gray-400">
+            Reads data as {app.owner === me.subject ? "you" : app.owner}
+            {app.shared && <> · {SHARED_DATA_WORDING}</>}
+          </p>
+        )}
+        {me.dataAccess && paused && (
+          <p className="text-sm text-amber-900 dark:text-amber-200">
+            Data access paused: {app.dataPausedReason}
+            {canAuthor && " A workspace owner can take ownership to restore it."}
+          </p>
+        )}
         {canAuthor && app.status?.state === "failed" && app.status.reason && (
           <p className="text-sm text-red-700 dark:text-red-400">Failed to start: {app.status.reason}</p>
         )}
@@ -108,6 +125,11 @@ function AppRow({ app, canAuthor, onEdit, act }: { app: BoothApp; canAuthor: boo
               {running ? "Stop" : "Start"}
             </button>
             <button type="button" onClick={onEdit} className="rounded border border-gray-300 px-2 py-1 dark:border-gray-700">Edit</button>
+            {me.dataAccess && paused && (
+              <button type="button" onClick={() => act(() => api.takeOwnership(app.id))} className="rounded border border-amber-400 px-2 py-1 text-amber-900 dark:border-amber-700 dark:text-amber-200">
+                Take ownership
+              </button>
+            )}
           </>
         )}
       </div>

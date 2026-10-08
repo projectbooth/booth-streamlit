@@ -56,6 +56,13 @@
       "groups": ["/workspaces/acme-analytics/owner"]
     },
     {
+      "username": "owner2-user",
+      "enabled": true, "emailVerified": true, "email": "owner2-user@example.test",
+      "firstName": "Owner", "lastName": "Two",
+      "credentials": [{"type": "password", "value": "__TEST_PASSWORD__", "temporary": false}],
+      "groups": ["/workspaces/acme-analytics/owner"]
+    },
+    {
       "username": "editor-user",
       "enabled": true, "emailVerified": true, "email": "editor-user@example.test",
       "firstName": "Editor", "lastName": "User",

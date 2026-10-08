@@ -12,12 +12,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/projectbooth/booth-streamlit/internal/api"
 	"github.com/projectbooth/booth-streamlit/internal/apps"
 	"github.com/projectbooth/booth-streamlit/internal/config"
+	"github.com/projectbooth/booth-streamlit/internal/dataaccess"
 	"github.com/projectbooth/booth-streamlit/internal/db"
 	"github.com/projectbooth/booth-streamlit/internal/events"
 	"github.com/projectbooth/booth-streamlit/internal/identity"
@@ -70,9 +72,31 @@ func run() error {
 	svc := apps.NewService(store, cfg.MaxSourceBytes)
 	svc.SetCaps(apps.Caps{MaxRunning: cfg.Lifecycle.MaxRunning, MaxRunningPerWorkspace: cfg.Lifecycle.MaxPerWS})
 
-	ctrl, err := newLifecycle(ctx, cfg.Lifecycle, svc)
+	ctrl, err := newLifecycle(ctx, cfg.Lifecycle, cfg.Data, svc)
 	if err != nil {
 		return err
+	}
+	if cfg.Data.Enabled {
+		// The internal port: the gates' token refresh and the sidecars' broker forwarder. App pods
+		// reach it; nothing else should (NetworkPolicy), and it never goes through core.
+		in := &dataaccess.Internal{
+			Apps:    svc,
+			Tokens:  &dataaccess.Tokens{Minter: &dataaccess.CoreMinter{URL: cfg.Data.MintURL, Credential: cfg.Data.MintCredential}, MaxAge: cfg.Data.RefreshMax},
+			CoreURL: cfg.Data.CoreURL,
+		}
+		internal := &http.Server{Addr: cfg.Data.InternalAddr, Handler: in.Router(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			log.Printf("booth-streamlit internal port listening on %s", cfg.Data.InternalAddr)
+			if err := internal.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("internal port: %v", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			_ = internal.Close()
+		}()
+	} else {
+		log.Print("data access is off (dataAccess.enabled=false): apps run without database or file access")
 	}
 	svc.OnChange = ctrl.OnAppChange
 	go ctrl.Run(ctx)
@@ -81,7 +105,7 @@ func run() error {
 		Addr: cfg.HTTPAddr,
 		Handler: api.NewRouter(api.Deps{
 			DB: pool, Bus: bus, Web: api.WebDir(cfg.WebDir),
-			Verifier: verifier, Apps: svc, Status: ctrl.Status,
+			Verifier: verifier, Apps: svc, Status: ctrl.Status, DataAccess: cfg.Data.Enabled,
 			Proxy: &proxy.Handler{
 				Verifier:     verifier,
 				Apps:         proxy.LifecycleResolver{Apps: svc, Lifecycle: ctrl, Namespace: cfg.Lifecycle.Namespace},
@@ -108,7 +132,7 @@ func run() error {
 
 // newLifecycle builds the per-app controller from the in-cluster Kubernetes API. The backend's own
 // Deployment is read once, to own every app Deployment (so uninstalling removes all apps).
-func newLifecycle(ctx context.Context, l config.Lifecycle, svc *apps.Service) (*lifecycle.Controller, error) {
+func newLifecycle(ctx context.Context, l config.Lifecycle, d config.Data, svc *apps.Service) (*lifecycle.Controller, error) {
 	rc, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes config: %w (the backend must run in the cluster it starts apps in)", err)
@@ -136,7 +160,27 @@ func newLifecycle(ctx context.Context, l config.Lifecycle, svc *apps.Service) (*
 	if _, err := resource.ParseQuantity(l.TmpSizeLimit); err != nil {
 		return nil, fmt.Errorf("BOOTH_APP_TMP_SIZE_LIMIT: %w", err)
 	}
+	var data *lifecycle.DataConfig
+	if d.Enabled {
+		var sideRes corev1.ResourceRequirements
+		if d.SidecarResources != "" {
+			if err := json.Unmarshal([]byte(d.SidecarResources), &sideRes); err != nil {
+				return nil, fmt.Errorf("BOOTH_APP_SIDECAR_RESOURCES: %w", err)
+			}
+		}
+		data = &lifecycle.DataConfig{
+			TokenURL:         strings.TrimRight(d.InternalURL, "/") + "/internal/token",
+			BrokerURL:        strings.TrimRight(d.InternalURL, "/") + "/internal/broker",
+			SidecarImage:     d.SidecarImage,
+			SidecarResources: sideRes,
+			Database:         d.Database,
+		}
+		if d.RefreshMax > 0 {
+			data.RefreshMax = d.RefreshMax.String()
+		}
+	}
 	return lifecycle.New(lifecycle.Config{
+		Data:      data,
 		Namespace: l.Namespace, RuntimeImage: l.RuntimeImage, GateImage: l.GateImage,
 		PullPolicy: corev1.PullPolicy(l.PullPolicy), ServiceAccount: l.ServiceAccount,
 		AppResources: appRes, GateResources: gateRes, TmpSizeLimit: l.TmpSizeLimit,

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -31,6 +32,28 @@ func main() {
 	bearer := strings.TrimSpace(string(raw))
 	if len(bearer) < 32 {
 		log.Fatal("the gate bearer is missing or too short; refusing to start")
+	}
+
+	// Data access (ADR 0107): keep the app's workload token on the volume only the sidecars share,
+	// and tell the app's own code (on loopback only) whether its data access works.
+	if tokenURL := os.Getenv("BOOTH_GATE_TOKEN_URL"); tokenURL != "" {
+		r := &gate.Refresher{URL: tokenURL, Bearer: bearer, File: getEnv("BOOTH_GATE_TOKEN_FILE", "/var/run/booth/token/token")}
+		if v := os.Getenv("BOOTH_GATE_REFRESH_MAX"); v != "" {
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				log.Fatalf("BOOTH_GATE_REFRESH_MAX: %v", err)
+			}
+			r.MaxInterval = d
+		}
+		go r.Run(context.Background())
+		statusAddr := getEnv("BOOTH_GATE_STATUS_LISTEN", "127.0.0.1:8090")
+		if host, _, _ := strings.Cut(statusAddr, ":"); host != "127.0.0.1" {
+			log.Fatal("BOOTH_GATE_STATUS_LISTEN must be a 127.0.0.1 address: it is for the app's own code only")
+		}
+		go func() {
+			s := &http.Server{Addr: statusAddr, Handler: r.StatusHandler(), ReadHeaderTimeout: 5 * time.Second}
+			log.Fatal(s.ListenAndServe())
+		}()
 	}
 
 	srv := &http.Server{

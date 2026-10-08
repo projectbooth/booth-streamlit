@@ -46,6 +46,8 @@ type Deps struct {
 	Apps     *apps.Service
 	// Status reports each app's observed state in API responses; nil omits it.
 	Status StatusFunc
+	// DataAccess tells the UI whether this install gives apps data access (ADR 0104/0107).
+	DataAccess bool
 }
 
 // dbPingTimeout bounds the /healthz database check, so a hung Postgres shows as unhealthy within
@@ -65,7 +67,7 @@ func NewRouter(deps Deps) http.Handler {
 	})
 	r.Get("/healthz", healthz(deps))
 	if deps.Verifier != nil && deps.Apps != nil {
-		mountAppAPI(r, deps.Verifier, deps.Apps, deps.Status)
+		mountAppAPI(r, deps.Verifier, deps.Apps, deps.Status, deps.DataAccess)
 	}
 	if deps.Proxy != nil {
 		deps.Proxy.Mount(r)

@@ -6,14 +6,14 @@ import type { App as BoothApp, Role } from "../api";
 
 const shared: BoothApp = {
   id: "aaaa", workspace: "acme", name: "Sales", description: "by region", shared: true, desiredState: "stopped",
-  suspended: false, status: { state: "stopped" },
+  suspended: false, status: { state: "stopped" }, owner: "o",
   createdBy: "o", createdAt: "2026-10-08T00:00:00Z", updatedBy: "o", updatedAt: "2026-10-08T00:00:00Z",
 };
 
 type Call = { method: string; url: string; body?: unknown };
 
 // A fake backend: answers /api/me for the given role and records every request.
-function backend(role: Role, apps: BoothApp[] = [shared], overrides: Record<string, () => Response> = {}) {
+function backend(role: Role, apps: BoothApp[] = [shared], overrides: Record<string, () => Response> = {}, dataAccess = false) {
   const calls: Call[] = [];
   const json = (status: number, data: unknown) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
   vi.stubGlobal(
@@ -23,7 +23,7 @@ function backend(role: Role, apps: BoothApp[] = [shared], overrides: Record<stri
       calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
       const key = `${method} ${url}`;
       if (overrides[key]) return overrides[key]();
-      if (key === "GET api/me") return json(200, { subject: "u", workspace: "acme", role, canAuthor: role === "owner" });
+      if (key === "GET api/me") return json(200, { subject: "u", workspace: "acme", role, canAuthor: role === "owner", dataAccess });
       if (key === "GET api/apps") return json(200, { apps });
       if (key === "POST api/apps") return json(201, { ...shared, id: "new" });
       if (key.startsWith("POST api/apps/")) return json(200, { ...shared, desiredState: "running" });
@@ -139,5 +139,49 @@ describe("editor", () => {
     await userEvent.click(screen.getByRole("button", { name: "Click again to delete" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url === "api/apps/aaaa")).toBe(true));
     expect(confirmSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("data access (ADR 0104/0107)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("says whose access a shared app reads with, and what it can read", async () => {
+    backend("viewer", [shared], {}, true);
+    render(<App />);
+    expect(await screen.findByText(/Reads data as o/)).toBeInTheDocument();
+    expect(screen.getByText(/This app can read any data you can read in this workspace\./)).toBeInTheDocument();
+  });
+
+  it("says nothing about data when the install has no data access", async () => {
+    backend("viewer", [shared], {}, false);
+    render(<App />);
+    expect(await screen.findByText("Sales")).toBeInTheDocument();
+    expect(screen.queryByText(/Reads data as/)).toBeNull();
+  });
+
+  it("shows a paused app's reason to everyone and Take ownership to owners only", async () => {
+    const paused = { ...shared, dataPausedReason: "the app's owner no longer has access to this workspace" };
+    const calls = backend("owner", [paused], {}, true);
+    const { unmount } = render(<App />);
+    expect(await screen.findByText("Data access paused")).toBeInTheDocument();
+    expect(screen.getByText(/the app's owner no longer has access/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Take ownership" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url === "api/apps/aaaa/take-ownership")).toBe(true));
+    unmount();
+
+    vi.unstubAllGlobals();
+    backend("viewer", [paused], {}, true);
+    render(<App />);
+    expect(await screen.findByText("Data access paused")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Take ownership" })).toBeNull();
+  });
+
+  it("the editor shows the wording when an app is shared", async () => {
+    backend("owner", [], {}, true);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "New app" }));
+    expect(screen.queryByText(/can read any data you can read/)).toBeNull();
+    await userEvent.click(screen.getByLabelText(/Shared with workspace members/));
+    expect(screen.getByText(/This app can read any data you can read in this workspace\./)).toBeInTheDocument();
   });
 });

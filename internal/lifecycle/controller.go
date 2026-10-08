@@ -47,6 +47,23 @@ type Config struct {
 	Interval time.Duration
 	// Owner is the module backend's own Deployment; every app Deployment is owned by it.
 	Owner *appsv1.Deployment
+	// Data, if set, gives app pods data access (ADR 0104/0107); nil runs apps without any.
+	Data *DataConfig
+}
+
+// DataConfig is the per-app data-access wiring (docs/design-data-access.md).
+type DataConfig struct {
+	// TokenURL is the backend's POST /internal/token, which the gate calls with its bearer.
+	TokenURL string
+	// BrokerURL is the backend's broker forwarder base; the sidecars' --core-url.
+	BrokerURL string
+	// SidecarImage is booth-core's credential sidecar, digest-pinned.
+	SidecarImage     string
+	SidecarResources corev1.ResourceRequirements
+	// Database adds the postgres sidecar and DATABASE_URL (booth-database installed).
+	Database bool
+	// RefreshMax caps the gate's refresh interval (a test knob; empty = two thirds of a token's life).
+	RefreshMax string
 }
 
 // State is an app's observed state, as the API and the proxy report it.

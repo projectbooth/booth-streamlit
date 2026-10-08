@@ -331,3 +331,41 @@ func TestAppAPI_StartAtTheCapIsAConflict(t *testing.T) {
 		t.Error("a refused start changed the app")
 	}
 }
+
+// ADR 0107 item 7: any current workspace owner may take over an app whose owner lost access, only
+// then, and each take-over is recorded with who, which app and the previous owner.
+func TestAppAPI_TakeOwnership(t *testing.T) {
+	h := newHarness(t)
+	shared, _ := h.seed()
+	other := h.as("owner-2", "acme", identity.RoleOwner)
+
+	if code, body := h.do(http.MethodPost, "/api/apps/"+shared.ID+"/take-ownership", other, nil); code != http.StatusConflict {
+		t.Fatalf("taking over an app whose owner still has access: %d %v", code, body)
+	}
+	cur, _ := h.store.Get(context.Background(), "acme", shared.ID)
+	if _, err := h.svc.DataPaused(context.Background(), cur, "owner gone"); err != nil {
+		t.Fatal(err)
+	}
+	for who, hdr := range map[string]http.Header{
+		"editor":                     h.as(editorSub, "acme", identity.RoleEditor),
+		"viewer":                     h.as(viewerSub, "acme", identity.RoleViewer),
+		"owner of another workspace": h.as(otherSub, "other-team", identity.RoleOwner),
+	} {
+		if code, _ := h.do(http.MethodPost, "/api/apps/"+shared.ID+"/take-ownership", hdr, nil); code != 403 && code != 404 {
+			t.Errorf("%s took over: %d", who, code)
+		}
+	}
+	code, body := h.do(http.MethodPost, "/api/apps/"+shared.ID+"/take-ownership", other, nil)
+	if code != 200 || body["owner"] != "owner-2" || body["dataPausedReason"] != nil {
+		t.Fatalf("take over: %d %v", code, body)
+	}
+	code, body = h.do(http.MethodGet, "/api/apps/"+shared.ID+"/ownership-changes", other, nil)
+	changes, _ := body["changes"].([]any)
+	if code != 200 || len(changes) != 1 {
+		t.Fatalf("changes: %d %v", code, body)
+	}
+	c := changes[0].(map[string]any)
+	if c["previousOwner"] != ownerSub || c["newOwner"] != "owner-2" || c["reason"] != "owner gone" || c["appId"] != shared.ID {
+		t.Errorf("recorded change %v", c)
+	}
+}

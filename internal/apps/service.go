@@ -93,7 +93,7 @@ func (s *Service) Create(ctx context.Context, c identity.Caller, in Input) (App,
 	}
 	now := s.now().UTC()
 	a := App{
-		ID: newID(), Workspace: c.Workspace, GateBearer: newBearer(),
+		ID: newID(), Workspace: c.Workspace, GateBearer: newBearer(), Owner: c.Subject,
 		Name: in.Name, Description: in.Description, Source: in.Source, Shared: in.Shared,
 		DesiredState: Stopped, CreatedBy: c.Subject, CreatedAt: now, UpdatedBy: c.Subject, UpdatedAt: now,
 	}

@@ -48,3 +48,49 @@ def user() -> Optional[User]:
     import streamlit as st  # imported here so user_from_headers is testable without Streamlit
 
     return user_from_headers(dict(st.context.headers))
+
+
+# --- Data access (ADR 0104/0107) --------------------------------------------------------------
+#
+# An app reads data as its owner, capped at viewer. The module wires it in for you: DATABASE_URL
+# points at a credential proxy on this pod's loopback, so any Postgres client works with no password
+# in your code. These helpers only add a clear answer when it can't work.
+
+import json as _json
+import os as _os
+import urllib.request as _urlreq
+
+__all__ += ["DataAccessPaused", "DataAccessOff", "data_status", "database_url"]
+
+
+class DataAccessPaused(RuntimeError):
+    """The app's owner can't currently lend it their access: they lost their role in this workspace,
+    or haven't signed in for 7 days. The app runs; its data doesn't, until they sign in again or a
+    workspace owner takes ownership of the app."""
+
+
+class DataAccessOff(RuntimeError):
+    """This Booth install doesn't give apps data access (the module's dataAccess.enabled is off)."""
+
+
+def data_status(timeout: float = 2.0) -> dict:
+    """{"state": "ok" | "paused" | "waiting", "reason": ...} from this pod's gate (loopback only)."""
+    url = _os.environ.get("BOOTH_DATA_STATUS_URL")
+    if not url:
+        return {"state": "off"}
+    try:
+        with _urlreq.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - fixed loopback URL from the pod spec
+            return _json.load(resp)
+    except OSError as exc:
+        return {"state": "unknown", "reason": str(exc)}
+
+
+def database_url() -> str:
+    """DATABASE_URL, or a clear exception saying why there is none or why it won't work right now."""
+    url = _os.environ.get("DATABASE_URL")
+    if not url:
+        raise DataAccessOff("this app has no database access (booth-database or the module's data access is not enabled)")
+    status = data_status()
+    if status.get("state") == "paused":
+        raise DataAccessPaused(status.get("reason") or "data access is paused")
+    return url

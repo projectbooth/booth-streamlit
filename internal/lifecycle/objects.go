@@ -27,7 +27,13 @@ const (
 	componentApp = "app"
 
 	annoSourceHash = "booth.projectbooth.io/source-hash"
-	annoSpecHash   = "booth.projectbooth.io/spec-hash"
+	annoDataEpoch  = "booth.projectbooth.io/data-epoch"
+
+	tokenDir     = "/var/run/booth/token"
+	tokenFile    = tokenDir + "/token"
+	statusAddr   = "127.0.0.1:8090"
+	pgListen     = "127.0.0.1:5432"
+	annoSpecHash = "booth.projectbooth.io/spec-hash"
 
 	gatePort      = 8080
 	streamlitPort = 8501
@@ -114,7 +120,7 @@ func deployment(cfg Config, a apps.App) *appsv1.Deployment {
 	tpl := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels:      podLabels,
-			Annotations: map[string]string{annoSourceHash: sourceHash(a)},
+			Annotations: map[string]string{annoSourceHash: sourceHash(a), annoDataEpoch: fmt.Sprint(a.DataEpoch)},
 		},
 		Spec: corev1.PodSpec{
 			ServiceAccountName:           cfg.ServiceAccount,
@@ -175,6 +181,9 @@ func deployment(cfg Config, a apps.App) *appsv1.Deployment {
 			},
 		},
 	}
+	if cfg.Data != nil {
+		addDataAccess(cfg, a, &tpl.Spec, readOnly)
+	}
 	d := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: deploymentName(a.ID), Namespace: cfg.Namespace, Labels: labels(a)},
 		Spec: appsv1.DeploymentSpec{
@@ -191,3 +200,65 @@ func deployment(cfg Config, a apps.App) *appsv1.Deployment {
 }
 
 func int32Ptr(v int32) *int32 { return &v }
+
+// addDataAccess wires an app pod for reading data as its owner (ADR 0107; docs/design-data-access.md
+// item 2). The rule that matters: the token volume is mounted into the gate (which writes it) and the
+// sidecars (which read it), and never into the Streamlit container, where user code runs. Containers
+// share the pod's network but not their filesystems, and the pod doesn't share process namespaces.
+func addDataAccess(cfg Config, a apps.App, spec *corev1.PodSpec, sc corev1.SecurityContext) {
+	data := cfg.Data
+	mem := resource.MustParse("1Mi")
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name:         "token",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: &mem}},
+	})
+	for i := range spec.Containers {
+		c := &spec.Containers[i]
+		switch c.Name {
+		case "gate":
+			c.Env = append(c.Env,
+				corev1.EnvVar{Name: "BOOTH_GATE_TOKEN_URL", Value: data.TokenURL},
+				corev1.EnvVar{Name: "BOOTH_GATE_TOKEN_FILE", Value: tokenFile},
+				corev1.EnvVar{Name: "BOOTH_GATE_STATUS_LISTEN", Value: statusAddr},
+			)
+			if data.RefreshMax != "" {
+				c.Env = append(c.Env, corev1.EnvVar{Name: "BOOTH_GATE_REFRESH_MAX", Value: data.RefreshMax})
+			}
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "token", MountPath: tokenDir})
+		case "streamlit":
+			c.Env = append(c.Env, corev1.EnvVar{Name: "BOOTH_DATA_STATUS_URL", Value: "http://" + statusAddr + "/_booth/data/status"})
+			if data.Database {
+				c.Env = append(c.Env, corev1.EnvVar{Name: "DATABASE_URL", Value: "postgresql://localhost:5432/" + WorkspaceDatabase(a.Workspace)})
+			}
+		}
+	}
+	if data.Database {
+		uid := int64(65532)
+		pgSC := sc
+		pgSC.RunAsUser = &uid
+		scope, _ := json.Marshal(map[string]string{"workspace": a.Workspace})
+		spec.Containers = append(spec.Containers, corev1.Container{
+			Name:            "pg-sidecar",
+			Image:           data.SidecarImage,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Args: []string{
+				"--kind=postgres", "--access=read",
+				"--scope=" + string(scope), "--workspace=" + a.Workspace,
+				"--token-file=" + tokenFile, "--listen=" + pgListen,
+				"--core-url=" + data.BrokerURL,
+			},
+			Resources:       data.SidecarResources,
+			SecurityContext: &pgSC,
+			VolumeMounts:    []corev1.VolumeMount{{Name: "token", MountPath: tokenDir, ReadOnly: true}},
+		})
+	}
+}
+
+// WorkspaceDatabase is the workspace's database name in booth-database (its
+// internal/naming.ForWorkspace; booth-notebooks computes it the same way). Informational: the sidecar
+// connects to whatever database its credential names; this makes DATABASE_URL and
+// current_database() agree.
+func WorkspaceDatabase(workspace string) string {
+	sum := sha256.Sum256([]byte("booth-database/workspace/" + workspace))
+	return "bdb_ws_" + hex.EncodeToString(sum[:])[:24]
+}

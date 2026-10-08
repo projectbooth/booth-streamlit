@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -48,6 +49,33 @@ type Config struct {
 
 	// Lifecycle configures the per-app containers (design note (a)).
 	Lifecycle Lifecycle
+
+	// Data configures data access (ADR 0104/0107). Zero value: off.
+	Data Data
+}
+
+// Data is the data-access configuration (docs/design-data-access.md). Every value comes from the
+// chart; Enabled is false unless the chart's dataAccess.enabled is set.
+type Data struct {
+	Enabled bool
+	// MintURL and MintCredential are core's minting endpoint and this module's credential, from the
+	// booth-workload-minting-credentials Secret core writes once the manifest declares
+	// workloadIdentity: {mint: true} (ADR 0056/0058).
+	MintURL        string
+	MintCredential string
+	// CoreURL is booth-core, for the broker forwarder (POST /api/credentials).
+	CoreURL string
+	// InternalAddr is where the internal port listens; InternalURL is how app pods reach it.
+	InternalAddr string
+	InternalURL  string
+	SidecarImage string
+	// SidecarResources is Kubernetes ResourceRequirements, as JSON.
+	SidecarResources string
+	// Database adds the postgres sidecar to app pods (booth-database installed).
+	Database bool
+	// RefreshMax, if set, makes tokens re-mint and gates re-fetch at least this often (a test
+	// knob).
+	RefreshMax time.Duration
 }
 
 // Lifecycle is the per-app container configuration. Every value comes from the chart.
@@ -113,6 +141,37 @@ func Load() (Config, error) {
 	if cfg.NATSCredsFile != "" && cfg.NATSURL == "" {
 		return Config{}, fmt.Errorf("BOOTH_NATS_CREDS_FILE is set but BOOTH_NATS_URL is not: the credentials have no bus to connect to")
 	}
+	if os.Getenv("BOOTH_DATA_ACCESS") == "true" {
+		d := &cfg.Data
+		d.Enabled = true
+		d.MintURL = os.Getenv("BOOTH_WORKLOAD_MINT_URL")
+		d.MintCredential = os.Getenv("BOOTH_WORKLOAD_MINT_CREDENTIAL")
+		d.CoreURL = os.Getenv("BOOTH_CORE_URL")
+		d.InternalAddr = getEnv("BOOTH_INTERNAL_ADDR", ":8081")
+		d.InternalURL = os.Getenv("BOOTH_INTERNAL_URL")
+		d.SidecarImage = os.Getenv("BOOTH_APP_SIDECAR_IMAGE")
+		d.SidecarResources = os.Getenv("BOOTH_APP_SIDECAR_RESOURCES")
+		d.Database = os.Getenv("BOOTH_APP_DATABASE") == "true"
+		for _, req := range []struct{ name, val string }{
+			{"BOOTH_WORKLOAD_MINT_URL", d.MintURL}, {"BOOTH_WORKLOAD_MINT_CREDENTIAL", d.MintCredential},
+			{"BOOTH_CORE_URL", d.CoreURL}, {"BOOTH_INTERNAL_URL", d.InternalURL}, {"BOOTH_APP_SIDECAR_IMAGE", d.SidecarImage},
+		} {
+			if req.val == "" {
+				return Config{}, fmt.Errorf("%s is required when BOOTH_DATA_ACCESS=true", req.name)
+			}
+		}
+		if !strings.Contains(d.SidecarImage, "@sha256:") {
+			return Config{}, fmt.Errorf("BOOTH_APP_SIDECAR_IMAGE must be digest-pinned (image@sha256:...), got %q", d.SidecarImage)
+		}
+		if v := os.Getenv("BOOTH_DATA_REFRESH_MAX"); v != "" {
+			n, err := time.ParseDuration(v)
+			if err != nil || n <= 0 {
+				return Config{}, fmt.Errorf("BOOTH_DATA_REFRESH_MAX must be a positive duration, got %q", v)
+			}
+			d.RefreshMax = n
+		}
+	}
+
 	l := &cfg.Lifecycle
 	for _, req := range []struct{ name, val string }{
 		{"BOOTH_NAMESPACE", l.Namespace}, {"BOOTH_SELF_DEPLOYMENT", l.SelfDeployment},
