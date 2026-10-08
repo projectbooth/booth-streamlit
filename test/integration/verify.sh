@@ -68,14 +68,19 @@ echo "$page" | grep -q 'src="./assets/' || fail "asset URLs are not relative: $p
 
 echo "--- the backend's Kubernetes API access is exactly its Role (docs/design-v0.md (a)), checked live"
 sa="system:serviceaccount:$ns:booth-streamlit"
-for args in "create deployments.apps" "update deployments.apps" "delete deployments.apps" "list deployments.apps" \
-            "create services" "delete services" "create configmaps" "update configmaps" "list configmaps" \
-            "list pods" "create secrets" "delete secrets"; do
+for args in "create deployments.apps" "update deployments.apps" "delete deployments.apps" "list deployments.apps" "get deployments.apps" \
+            "create configmaps" "update configmaps" "delete configmaps" "list configmaps" "get configmaps" \
+            "create services" "delete services" "list services" \
+            "list pods" "create secrets"; do
   test "$(kubectl auth can-i $args -n $ns --as="$sa")" = "yes" || fail "the backend needs, and lacks: $args"
 done
 # Never read a Secret (core's credentials live in this namespace), never run a bare pod, never
 # touch RBAC, nothing outside its namespace.
-for args in "get secrets -n $ns" "list secrets -n $ns" "watch secrets -n $ns" "update secrets -n $ns" \
+# Nor anything the lifecycle doesn't call: no watch, no Service update/get, no pod get, no Secret
+# delete (the garbage collector removes a deleted app's Secret).
+for args in "get secrets -n $ns" "list secrets -n $ns" "watch secrets -n $ns" "update secrets -n $ns" "delete secrets -n $ns" \
+            "watch deployments.apps -n $ns" "watch configmaps -n $ns" "watch services -n $ns" "watch pods -n $ns" \
+            "update services -n $ns" "get services -n $ns" "get pods -n $ns" \
             "create pods -n $ns" "delete pods -n $ns" "create pods/exec -n $ns" \
             "create roles -n $ns" "create rolebindings -n $ns" "create clusterroles" \
             "get secrets -n kube-system" "create deployments.apps -n kube-system" "list deployments.apps -n booth-system"; do

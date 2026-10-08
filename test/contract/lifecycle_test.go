@@ -33,10 +33,12 @@ type rule struct {
 	verbs           string // sorted, comma-joined
 }
 
-// The backend's Kubernetes API access is exactly docs/design-v0.md (a) "Backend RBAC", rule for
-// rule, namespace-scoped, bound to the backend's account only. Any widening has to change this
-// test. Notably: Secrets are create/delete only (never get/list/watch/update), so the backend can't
-// read core's credentials in its namespace, and nothing is cluster-scoped.
+// The backend's Kubernetes API access is exactly the calls internal/lifecycle makes (and
+// docs/design-v0.md "As built: step 3", which tightened (a) to match), rule for rule,
+// namespace-scoped, bound to the backend's account only. Any widening has to change this test.
+// Notably: Secrets are create only (never get/list/watch/update/delete), so the backend can't read
+// core's credentials in its namespace; nothing has watch (the lifecycle polls); nothing is
+// cluster-scoped.
 func TestChart_BackendRoleIsExactlyTheDesignNotes(t *testing.T) {
 	for _, kind := range []string{"ClusterRole", "ClusterRoleBinding"} {
 		if n := len(docs(t, kind)); n != 0 {
@@ -65,13 +67,12 @@ func TestChart_BackendRoleIsExactlyTheDesignNotes(t *testing.T) {
 		}
 	}
 	sort.Slice(got, func(i, j int) bool { return got[i].group+"/"+got[i].resource < got[j].group+"/"+got[j].resource })
-	crud := "create,delete,get,list,update,watch"
 	want := []rule{
-		{"", "configmaps", crud},
-		{"", "pods", "get,list,watch"},
-		{"", "secrets", "create,delete"},
-		{"", "services", crud},
-		{"apps", "deployments", crud},
+		{"", "configmaps", "create,delete,get,list,update"},
+		{"", "pods", "list"},
+		{"", "secrets", "create"},
+		{"", "services", "create,delete,list"},
+		{"apps", "deployments", "create,delete,get,list,update"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Role rules:\n got %v\nwant %v", got, want)
