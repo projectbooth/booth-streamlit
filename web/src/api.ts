@@ -20,6 +20,9 @@ export interface App {
   source?: string;
   shared: boolean;
   desiredState: "running" | "stopped";
+  suspended: boolean;
+  /** What the lifecycle observes (internal/lifecycle). */
+  status: { state: "stopped" | "suspended" | "starting" | "running" | "failed"; reason?: string };
   createdBy: string;
   createdAt: string;
   updatedBy: string;

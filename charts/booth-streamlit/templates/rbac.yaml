@@ -1,0 +1,55 @@
+# The backend's Kubernetes API access: exactly what running one Deployment per app needs
+# (docs/design-v0.md (a), "Backend RBAC"), namespace-scoped, nothing else. test/contract pins these
+# rules exactly, so widening them has to change that test too.
+#
+# - Deployments, Services, ConfigMaps: each app's Deployment, Service and source ConfigMap, which
+#   the lifecycle creates, updates, lists (to reconcile) and deletes. `get` on Deployments also
+#   reads the backend's own Deployment once, to own every app Deployment (uninstall cleanup).
+# - Pods: read only, to report why an app failed to start (image pull, crash loop).
+# - Secrets: create and delete, never get/list/watch/update. The backend writes each app's gate
+#   bearer and can never read any Secret back, including core's credentials in this namespace;
+#   it keeps its own copy of each bearer in its database instead.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "booth-streamlit.fullname" . }}-apps
+  labels:
+    {{- include "booth-streamlit.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "update", "delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
+    verbs: ["create", "update", "delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "booth-streamlit.fullname" . }}-apps
+  labels:
+    {{- include "booth-streamlit.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "booth-streamlit.fullname" . }}-apps
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "booth-streamlit.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# App pods run as this account: no bindings, no token mounted (the lifecycle also sets
+# automountServiceAccountToken: false on every app pod). User code gets no Kubernetes API access.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "booth-streamlit.fullname" . }}-app
+  labels:
+    {{- include "booth-streamlit.labels" . | nindent 4 }}
+automountServiceAccountToken: false

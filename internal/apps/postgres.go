@@ -26,12 +26,12 @@ func NewPostgresStore(ctx context.Context, pool *pgxpool.Pool) (*PostgresStore, 
 	return &PostgresStore{pool: pool}, nil
 }
 
-const cols = `id, workspace, name, description, source, shared, desired_state, created_by, created_at, updated_by, updated_at`
+const cols = `id, workspace, name, description, source, shared, desired_state, suspended, gate_bearer, created_by, created_at, updated_by, updated_at`
 
 func scanApp(row pgx.Row) (App, error) {
 	var a App
 	var st string
-	if err := row.Scan(&a.ID, &a.Workspace, &a.Name, &a.Description, &a.Source, &a.Shared, &st, &a.CreatedBy, &a.CreatedAt, &a.UpdatedBy, &a.UpdatedAt); err != nil {
+	if err := row.Scan(&a.ID, &a.Workspace, &a.Name, &a.Description, &a.Source, &a.Shared, &st, &a.Suspended, &a.GateBearer, &a.CreatedBy, &a.CreatedAt, &a.UpdatedBy, &a.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return App{}, ErrNotFound
 		}
@@ -55,7 +55,7 @@ func (s *PostgresStore) List(ctx context.Context, workspace string, sharedOnly b
 		if err != nil {
 			return nil, err
 		}
-		a.Source = ""
+		a.Source, a.GateBearer = "", ""
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -66,8 +66,8 @@ func (s *PostgresStore) Get(ctx context.Context, workspace, id string) (App, err
 }
 
 func (s *PostgresStore) Create(ctx context.Context, a App) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO apps (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		a.ID, a.Workspace, a.Name, a.Description, a.Source, a.Shared, string(a.DesiredState), a.CreatedBy, a.CreatedAt, a.UpdatedBy, a.UpdatedAt)
+	_, err := s.pool.Exec(ctx, `INSERT INTO apps (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		a.ID, a.Workspace, a.Name, a.Description, a.Source, a.Shared, string(a.DesiredState), a.Suspended, a.GateBearer, a.CreatedBy, a.CreatedAt, a.UpdatedBy, a.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("creating app: %w", err)
 	}
@@ -87,8 +87,36 @@ func (s *PostgresStore) Update(ctx context.Context, a App) error {
 }
 
 func (s *PostgresStore) SetDesiredState(ctx context.Context, workspace, id string, st DesiredState, by string) (App, error) {
-	return scanApp(s.pool.QueryRow(ctx, `UPDATE apps SET desired_state = $3, updated_by = $4
+	return scanApp(s.pool.QueryRow(ctx, `UPDATE apps SET desired_state = $3, updated_by = $4, suspended = FALSE
 		WHERE workspace = $1 AND id = $2 RETURNING `+cols, workspace, id, string(st), by))
+}
+
+func (s *PostgresStore) SetSuspended(ctx context.Context, workspace, id string, suspended bool) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE apps SET suspended = $3 WHERE workspace = $1 AND id = $2`, workspace, id, suspended)
+	if err != nil {
+		return fmt.Errorf("setting suspended: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListAll(ctx context.Context) ([]App, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+cols+` FROM apps ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing all apps: %w", err)
+	}
+	defer rows.Close()
+	var out []App
+	for rows.Next() {
+		a, err := scanApp(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 func (s *PostgresStore) Delete(ctx context.Context, workspace, id string) error {

@@ -244,3 +244,38 @@ on a service connection.
    refused".
 4. `dashboard.*` publishing on create/update/delete (ADR 0046), verified against booth-catalog.
 5. Data access, only after the ADR for (c).
+
+## As built: step 3 (lifecycle), 2026-10-08
+
+Sections (a) and (b) are built as written, with these differences. Each one is deliberate, and
+each is covered by a test.
+
+- **Waking is not starting (ADR 0105).** (a) said a viewer opening a stopped app starts it. Since
+  ADR 0105 only owners may start an app. So there are two kinds of "down":
+  - **Stopped:** the owner chose Stop. It stays down for everyone else.
+  - **Suspended:** idle shutdown. The owner's choice is still Running, and opening the app wakes
+    it, within the cap, for anyone who may open it.
+  The UI labels a suspended app "Sleeping".
+- **The bearer lives in the database as well as the Secret.** The Role can create and delete
+  Secrets but never read them, so the backend keeps its own copy of each app's bearer. It is
+  generated when the app is created and never changes. The gate reads it from the Secret, which is
+  mounted into the gate container only.
+- **Owner references have `blockOwnerDeletion: false`.** Setting it true would need update on
+  `deployments/finalizers` wherever the OwnerReferencesPermissionEnforcement admission plugin runs.
+  The Role doesn't grant that. Garbage collection still removes an app's objects with its
+  Deployment, and all apps with the backend's Deployment.
+- **Reconcile polls** every 5 s, and runs immediately after any change through the API. The Role
+  grants `watch` as (a) listed it, but nothing uses it yet.
+- **Egress (ADR 0104 item 4)** is built as part of the app pods' NetworkPolicy:
+  - `apps.egress.mode`: `open` (default) is internet only; `closed` is DNS only.
+  - Every private, CGNAT and link-local range is excluded, which includes the metadata address.
+  - Per-app `pip install` is not built yet.
+- **A ResourceQuota on limits** means every pod in the namespace must declare limits. The backend
+  and app pods do.
+- **A change invalidates what was observed about an app, synchronously.** The lifecycle
+  integration test found a real race: a viewer visiting two seconds after idle shutdown got a 502.
+  The proxy had trusted a cached "running" from the reconcile that suspended the app, and forwarded
+  to a pod already being removed. Now every start, stop, suspend, wake, edit and delete drops that
+  app's cached state before the call returns. A reconcile that listed the apps before the change
+  can't write its stale observation back (a per-app generation counter). Unit tests reproduce
+  both halves, and fail with the fix removed.

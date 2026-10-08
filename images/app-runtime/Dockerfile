@@ -2,8 +2,9 @@
 # The per-app runtime: Streamlit plus the booth_streamlit helper. One container of this image runs
 # one user's app (design note (a)); the module backend never runs Streamlit itself.
 #
-# Step 1 scope: enough to prove the URL and websocket path through core's iframe proxy. The data
-# libraries, the gate container and per-app pip installs (ADR 0104) arrive with the lifecycle.
+# Streamlit binds 127.0.0.1 in the pod (STREAMLIT_SERVER_ADDRESS, set by the lifecycle); the gate
+# container, which runs from the backend's image, is the pod's only way in. The data libraries and
+# per-app pip installs (ADR 0104) arrive with data access.
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

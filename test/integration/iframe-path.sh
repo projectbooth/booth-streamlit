@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Build step 1's end-to-end check, after deploy-realcore.sh: a real Chromium reaches the demo app
-# through booth-core's iframe proxy, with real Keycloak tokens and core's real X-Booth-Identity.
-# See browser/iframe-path.mjs for what is checked.
+# A real Chromium reaches a running app through booth-core's iframe proxy, with real Keycloak
+# tokens and core's real X-Booth-Identity. Run by lifecycle.sh with APP_ID set to an app it has
+# started (shared with the workspace, source fixtures/demo_app.py). See browser/iframe-path.mjs for
+# what is checked.
 #
 # Tokens and iframe URLs are minted inside the cluster (a token's `iss` must be Keycloak's
 # in-cluster URL, which is what core trusts), then the browser reaches core through a
 # port-forward. Core's navigation token lives one minute, so the browser runs right after.
 set -euo pipefail
+: "${APP_ID:?APP_ID must name a running, shared app}"
 
 here=$(cd "$(dirname "$0")" && pwd)
 port=${CORE_PORT:-18080}
@@ -71,4 +73,4 @@ read -r _ _ outsider_url <<<"$outsider"
 case "$viewer_sub$viewer_url$outsider_url" in *no*|"") fail "could not mint tokens/URLs: $redacted" ;; esac
 
 echo "--- Chromium through core's iframe proxy"
-(cd "$here/browser" && node iframe-path.mjs "http://localhost:$port" "$viewer_url" "$viewer_sub" "$outsider_url")
+(cd "$here/browser" && node iframe-path.mjs "http://localhost:$port" "$viewer_url" "$viewer_sub" "$outsider_url" "$APP_ID")

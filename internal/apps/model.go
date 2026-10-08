@@ -34,10 +34,15 @@ type App struct {
 	Source       string       `json:"source,omitempty"` // omitted in lists
 	Shared       bool         `json:"shared"`
 	DesiredState DesiredState `json:"desiredState"`
-	CreatedBy    string       `json:"createdBy"`
-	CreatedAt    time.Time    `json:"createdAt"`
-	UpdatedBy    string       `json:"updatedBy"`
-	UpdatedAt    time.Time    `json:"updatedAt"`
+	// Suspended: idle shutdown stopped the container; DesiredState is still Running and any
+	// member who may open the app wakes it.
+	Suspended bool `json:"suspended"`
+	// GateBearer is the per-app secret for the app pod's gate (design note (b)). Never serialized.
+	GateBearer string    `json:"-"`
+	CreatedBy  string    `json:"createdBy"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedBy  string    `json:"updatedBy"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // Input is what an owner sets when creating or editing an app.
@@ -66,4 +71,8 @@ var (
 	ErrForbidden = errors.New("only workspace owners may create, edit, start, stop or delete apps")
 	// ErrInvalid wraps an input validation failure.
 	ErrInvalid = errors.New("invalid app")
+	// ErrCapacity: starting or waking the app would exceed the running-app cap.
+	ErrCapacity = errors.New("too many apps are running; stop one first")
+	// ErrStopped: the app's owner has stopped it; only an owner's Start brings it back.
+	ErrStopped = errors.New("this app is stopped")
 )

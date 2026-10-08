@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,9 +12,19 @@ import (
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/projectbooth/booth-streamlit/internal/apps"
 	"github.com/projectbooth/booth-streamlit/internal/identity"
 )
+
+// fixed is a Resolver over a fixed table, checking only the workspace.
+type fixed map[string]App
+
+func (f fixed) Resolve(_ context.Context, c identity.Caller, id string) (App, error) {
+	a, ok := f[id]
+	if !ok || a.Workspace != c.Workspace {
+		return App{}, ErrNotFound
+	}
+	return a, nil
+}
 
 // fakeVerifier accepts the request iff it carries X-Booth-Identity: good-<workspace>.
 type fakeVerifier struct{}
@@ -68,7 +77,7 @@ func newProxy(t *testing.T, a *app) *httptest.Server {
 	t.Helper()
 	u, _ := url.Parse(a.srv.URL)
 	r := chi.NewRouter()
-	(&Handler{Verifier: fakeVerifier{}, Apps: StaticResolver{"demo": {ID: "demo", Workspace: "acme", Target: u}}}).Mount(r)
+	(&Handler{Verifier: fakeVerifier{}, Apps: fixed{"demo": {ID: "demo", Workspace: "acme", Target: u, Bearer: "the-bearer"}}}).Mount(r)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	return srv
@@ -197,77 +206,5 @@ func TestProxy_Websocket(t *testing.T) {
 	_, resp, err := websocket.Dial(ctx, wsURL, nil)
 	if err == nil || resp == nil || resp.StatusCode != 401 {
 		t.Fatalf("an unauthenticated upgrade was not refused: %v %v", resp, err)
-	}
-}
-
-func TestParseStatic(t *testing.T) {
-	r, err := ParseStatic(`{"demo":{"workspace":"acme","url":"http://demo-app:8501"}}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	acme := identity.Caller{Subject: "u", Workspace: "acme", Role: identity.RoleViewer}
-	a, err := r.Resolve(context.Background(), acme, "demo")
-	if err != nil || a.Workspace != "acme" || a.Target.String() != "http://demo-app:8501" {
-		t.Fatalf("%+v %v", a, err)
-	}
-	if _, err := r.Resolve(context.Background(), acme, "nope"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("unknown id: %v", err)
-	}
-	other := identity.Caller{Subject: "u", Workspace: "other", Role: identity.RoleOwner}
-	if _, err := r.Resolve(context.Background(), other, "demo"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("another workspace's caller resolved the app: %v", err)
-	}
-	if empty, err := ParseStatic(""); err != nil || len(empty) != 0 {
-		t.Errorf("empty config: %v %v", empty, err)
-	}
-	for _, bad := range []string{
-		`not json`,
-		`{"Bad_ID":{"workspace":"a","url":"http://x"}}`,
-		`{"a":{"workspace":"","url":"http://x"}}`,
-		`{"a":{"workspace":"w","url":"file:///etc"}}`,
-		`{"a":{"workspace":"w","url":"http://x/some/path"}}`,
-	} {
-		if _, err := ParseStatic(bad); err == nil {
-			t.Errorf("accepted %s", bad)
-		}
-	}
-}
-
-// Apps from the app model go through apps.Service's visibility rule. Until the lifecycle exists
-// none has a container: a visible app is 503 "not running", an invisible one 404, exactly like a
-// missing app.
-func TestProxy_AppModelApps(t *testing.T) {
-	svc := apps.NewService(apps.NewMemoryStore(), 0)
-	owner := identity.Caller{Subject: "o", Workspace: "acme", Role: identity.RoleOwner}
-	ctx := context.Background()
-	private, err := svc.Create(ctx, owner, apps.Input{Name: "private", Source: "import streamlit"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	shared, err := svc.Create(ctx, owner, apps.Input{Name: "shared", Source: "import streamlit", Shared: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	r := chi.NewRouter()
-	(&Handler{Verifier: fakeVerifier{}, Apps: Chain{StaticResolver{}, AppsResolver{Apps: svc}}}).Mount(r)
-	srv := httptest.NewServer(r)
-	defer srv.Close()
-
-	// fakeVerifier makes every caller a viewer of the named workspace.
-	cases := []struct {
-		name, id, assertion string
-		want                int
-	}{
-		{"viewer, shared app", shared.ID, "good-acme", 503},
-		{"viewer, unshared app", private.ID, "good-acme", 404},
-		{"another workspace, shared app", shared.ID, "good-other", 404},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := do(t, srv, "/apps/"+c.id+"/", map[string]string{identity.HeaderIdentity: c.assertion}).StatusCode; got != c.want {
-				t.Errorf("status = %d, want %d", got, c.want)
-			}
-		})
 	}
 }

@@ -1,0 +1,46 @@
+# App pods (user-written code). Enforcement depends on the cluster's CNI (ARCHITECTURE.md item 37b;
+# see NOTES.txt): on a CNI that doesn't enforce NetworkPolicy this is inert, which is why every app
+# pod also has a gate that refuses traffic without the app's bearer (docs/design-v0.md (b)).
+#
+# Ingress: only the module backend, only to the gate's port.
+# Egress (ADR 0104 item 4): DNS always. With apps.egress.mode=open (the default, the user's
+# choice) also the internet, but no in-cluster or link-local destination: every private range
+# and the cloud metadata address (169.254.169.254) are excluded, so app code can't reach booth-core,
+# the module backend, another app, or this namespace's databases. closed allows DNS only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "booth-streamlit.fullname" . }}-apps
+  labels:
+    {{- include "booth-streamlit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      booth.projectbooth.io/component: app
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "booth-streamlit.selectorLabels" . | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.apps.egress.dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.apps.egress.dns.podSelector | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    {{- if eq .Values.apps.egress.mode "open" }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+    {{- else if ne .Values.apps.egress.mode "closed" }}
+    {{- fail "apps.egress.mode must be open or closed (ADR 0104)" }}
+    {{- end }}

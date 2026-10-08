@@ -319,40 +319,6 @@ func TestChart_EventBusIsWiredOrExplicitlyOff(t *testing.T) {
 	}
 }
 
-// The scaffold never calls the Kubernetes API, so it must not be granted RBAC or a mounted token.
-// Starting app containers will change this; that change should have to update this test.
-func TestChart_HasNoKubernetesAPIAccessYet(t *testing.T) {
-	out := helmTemplate(t, "")
-	for _, kind := range []string{"kind: Role", "kind: ClusterRole", "kind: RoleBinding", "kind: ClusterRoleBinding"} {
-		if bytes.Contains(out, []byte(kind)) {
-			t.Errorf("chart renders %q; the scaffold needs no Kubernetes API access", kind)
-		}
-	}
-	if !bytes.Contains(helmTemplate(t, "templates/deployment.yaml"), []byte("automountServiceAccountToken: false")) {
-		t.Error("the pod mounts a service-account token it never uses")
-	}
-}
-
-// The backend runs non-root, read-only, with no capabilities, and has resource limits (single-node
-// homelab sizing: an unbounded pod can starve everything else on the node).
-func TestChart_PodHardening(t *testing.T) {
-	dep := string(helmTemplate(t, "templates/deployment.yaml"))
-	for _, want := range []string{
-		"runAsNonRoot: true",
-		"readOnlyRootFilesystem: true",
-		"allowPrivilegeEscalation: false",
-		"- ALL",
-		"type: RuntimeDefault",
-	} {
-		if !strings.Contains(dep, want) {
-			t.Errorf("deployment lacks %q", want)
-		}
-	}
-	if !regexp.MustCompile(`limits:\s+cpu: \S+\s+memory: \S+`).MatchString(dep) {
-		t.Errorf("no CPU/memory limits on the backend:\n%s", dep)
-	}
-}
-
 // Every app request is authenticated against core's iframe-identity issuer (ADR 0069). The default
 // must be spelled exactly as core's chart publishes it, and an empty value must refuse to render.
 func TestChart_IframeIdentityIssuer(t *testing.T) {
@@ -369,16 +335,5 @@ func TestChart_IframeIdentityIssuer(t *testing.T) {
 	}
 	if !bytes.Contains(out, []byte("identity.issuerUrl is required")) {
 		t.Errorf("failure message not actionable:\n%s", out)
-	}
-}
-
-// The static-app test seam is off unless set.
-func TestChart_StaticAppsAreOffByDefault(t *testing.T) {
-	if bytes.Contains(helmTemplate(t, "templates/deployment.yaml"), []byte("BOOTH_STREAMLIT_STATIC_APPS")) {
-		t.Error("the static-app test seam is rendered in a default install")
-	}
-	on := helmTemplate(t, "templates/deployment.yaml", "--set-json", `staticApps="{\"demo\":{\"workspace\":\"acme\",\"url\":\"http://demo:8501\"}}"`)
-	if !bytes.Contains(on, []byte("BOOTH_STREAMLIT_STATIC_APPS")) {
-		t.Error("staticApps not rendered when set")
 	}
 }

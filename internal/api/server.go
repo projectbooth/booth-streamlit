@@ -44,6 +44,8 @@ type Deps struct {
 	// mounted.
 	Verifier Verifier
 	Apps     *apps.Service
+	// Status reports each app's observed state in API responses; nil omits it.
+	Status StatusFunc
 }
 
 // dbPingTimeout bounds the /healthz database check, so a hung Postgres shows as unhealthy within
@@ -63,7 +65,7 @@ func NewRouter(deps Deps) http.Handler {
 	})
 	r.Get("/healthz", healthz(deps))
 	if deps.Verifier != nil && deps.Apps != nil {
-		mountAppAPI(r, deps.Verifier, deps.Apps)
+		mountAppAPI(r, deps.Verifier, deps.Apps, deps.Status)
 	}
 	if deps.Proxy != nil {
 		deps.Proxy.Mount(r)

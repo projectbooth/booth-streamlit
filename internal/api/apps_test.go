@@ -312,3 +312,22 @@ func TestAppAPI_InputHandling(t *testing.T) {
 		t.Errorf("form post: %d, want 415", rec.Code)
 	}
 }
+
+// The running-app cap: an owner's Start beyond it is 409 with the reason, and the app stays
+// stopped.
+func TestAppAPI_StartAtTheCapIsAConflict(t *testing.T) {
+	h := newHarness(t)
+	h.svc.SetCaps(apps.Caps{MaxRunning: 1})
+	shared, private := h.seed()
+	owner := h.as(ownerSub, "acme", identity.RoleOwner)
+	if code, _ := h.do(http.MethodPost, "/api/apps/"+shared.ID+"/start", owner, nil); code != 200 {
+		t.Fatalf("first start: %d", code)
+	}
+	code, body := h.do(http.MethodPost, "/api/apps/"+private.ID+"/start", owner, nil)
+	if code != http.StatusConflict || !strings.Contains(body["error"].(string), "too many apps") {
+		t.Fatalf("start at the cap: %d %v", code, body)
+	}
+	if a, _ := h.store.Get(context.Background(), "acme", private.ID); a.DesiredState != apps.Stopped {
+		t.Error("a refused start changed the app")
+	}
+}

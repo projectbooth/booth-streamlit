@@ -6,6 +6,7 @@ import type { App as BoothApp, Role } from "../api";
 
 const shared: BoothApp = {
   id: "aaaa", workspace: "acme", name: "Sales", description: "by region", shared: true, desiredState: "stopped",
+  suspended: false, status: { state: "stopped" },
   createdBy: "o", createdAt: "2026-10-08T00:00:00Z", updatedBy: "o", updatedAt: "2026-10-08T00:00:00Z",
 };
 
@@ -74,6 +75,37 @@ describe("app list", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Start" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Only workspace owners can do that.");
+  });
+});
+
+describe("status", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows the observed state, and a failure's reason to owners only", async () => {
+    const failed = { ...shared, desiredState: "running" as const, status: { state: "failed" as const, reason: "streamlit: CrashLoopBackOff" } };
+    const sleeping = { ...shared, id: "bbbb", name: "Ops", desiredState: "running" as const, suspended: true, status: { state: "suspended" as const } };
+    backend("owner", [failed, sleeping]);
+    const { unmount } = render(<App />);
+    expect(await screen.findByText("Failed to start: streamlit: CrashLoopBackOff")).toBeInTheDocument();
+    expect(within(screen.getByText("Ops").closest("li")!).getByText("Sleeping")).toBeInTheDocument();
+    // A running (or sleeping) app offers Stop, not Start.
+    expect(within(screen.getByText("Ops").closest("li")!).getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    unmount();
+
+    vi.unstubAllGlobals();
+    backend("viewer", [failed]);
+    render(<App />);
+    expect(await screen.findByText("Failed")).toBeInTheDocument();
+    expect(screen.queryByText(/CrashLoopBackOff/)).toBeNull();
+  });
+
+  it("shows the backend's reason when Start is refused at the cap", async () => {
+    backend("owner", [shared], {
+      "POST api/apps/aaaa/start": () => new Response(JSON.stringify({ error: "too many apps are running; stop one first" }), { status: 409 }),
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("too many apps are running; stop one first");
   });
 });
 
