@@ -264,8 +264,18 @@ each is covered by a test.
   `deployments/finalizers` wherever the OwnerReferencesPermissionEnforcement admission plugin runs.
   The Role doesn't grant that. Garbage collection still removes an app's objects with its
   Deployment, and all apps with the backend's Deployment.
-- **Reconcile polls** every 5 s, and runs immediately after any change through the API. The Role
-  grants `watch` as (a) listed it, but nothing uses it yet.
+- **Reconcile polls** every 5 s, and runs immediately after any change through the API.
+- **The Role is tighter than (a) listed, on purpose** (coordinator ruling on PR #5): exactly the
+  calls the lifecycle makes, nothing more.
+  - Deployments and ConfigMaps: create, update, delete, get, list.
+  - Services: create, delete, list. A Service never changes once created.
+  - Pods: list.
+  - Secrets: create. A deleted app's Secret goes with its Deployment through its owner reference,
+    removed by the garbage collector, not the backend.
+
+  No `watch` anywhere, since the lifecycle polls. (a)'s "Backend RBAC" bullet is superseded by
+  this. `TestChart_BackendRoleIsExactlyTheDesignNotes` pins it, and `verify.sh` checks it live in
+  both directions.
 - **Egress (ADR 0104 item 4)** is built as part of the app pods' NetworkPolicy:
   - `apps.egress.mode`: `open` (default) is internet only; `closed` is DNS only.
   - Every private, CGNAT and link-local range is excluded, which includes the metadata address.

@@ -1,14 +1,17 @@
-# The backend's Kubernetes API access: exactly what running one Deployment per app needs
-# (docs/design-v0.md (a), "Backend RBAC"), namespace-scoped, nothing else. test/contract pins these
-# rules exactly, so widening them has to change that test too.
+# The backend's Kubernetes API access: exactly the calls internal/lifecycle makes, verb for verb
+# (docs/design-v0.md (a), "Backend RBAC", as built), namespace-scoped, nothing else. test/contract
+# pins these rules exactly, so any widening has to change that test too. No `watch` anywhere: the
+# lifecycle polls.
 #
-# - Deployments, Services, ConfigMaps: each app's Deployment, Service and source ConfigMap, which
-#   the lifecycle creates, updates, lists (to reconcile) and deletes. `get` on Deployments also
-#   reads the backend's own Deployment once, to own every app Deployment (uninstall cleanup).
-# - Pods: read only, to report why an app failed to start (image pull, crash loop).
-# - Secrets: create and delete, never get/list/watch/update. The backend writes each app's gate
-#   bearer and can never read any Secret back, including core's credentials in this namespace;
-#   it keeps its own copy of each bearer in its database instead.
+# - Deployments: create, update (scale and roll), delete, list (reconcile), get (the backend's own
+#   Deployment once at startup, to own every app Deployment, and the create-raced-with path).
+# - ConfigMaps (each app's source): create, update, delete, list, get (compare before updating).
+# - Services: create, delete, list. A Service never changes after creation, so no update or get.
+# - Pods: list only, to report why an app failed to start (image pull, crash loop).
+# - Secrets: create only. The backend writes each app's gate bearer and can never read, list,
+#   change or delete any Secret, including core's credentials in this namespace. It keeps its own
+#   copy of each bearer in its database; a deleted app's Secret is removed by the garbage collector
+#   through its owner reference, not by the backend.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -18,16 +21,19 @@ metadata:
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["create", "update", "delete", "get", "list", "watch"]
+    verbs: ["create", "update", "delete", "get", "list"]
   - apiGroups: [""]
-    resources: ["services", "configmaps"]
-    verbs: ["create", "update", "delete", "get", "list", "watch"]
+    resources: ["configmaps"]
+    verbs: ["create", "update", "delete", "get", "list"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "delete", "list"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["list"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["create", "delete"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
