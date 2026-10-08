@@ -9,7 +9,7 @@ import (
 // environment can't leak into a case.
 func setEnv(t *testing.T, kv map[string]string) {
 	t.Helper()
-	for _, k := range []string{"BOOTH_HTTP_ADDR", "BOOTH_POSTGRES_DSN", "BOOTH_NATS_URL", "BOOTH_NATS_CREDS_FILE", "BOOTH_WEB_DIR", "BOOTH_IFRAME_IDENTITY_ISSUER_URL", "BOOTH_OIDC_GROUPS_CLAIM", "BOOTH_STREAMLIT_STATIC_APPS"} {
+	for _, k := range []string{"BOOTH_HTTP_ADDR", "BOOTH_POSTGRES_DSN", "BOOTH_NATS_URL", "BOOTH_NATS_CREDS_FILE", "BOOTH_WEB_DIR", "BOOTH_IFRAME_IDENTITY_ISSUER_URL", "BOOTH_OIDC_GROUPS_CLAIM", "BOOTH_STREAMLIT_STATIC_APPS", "BOOTH_STREAMLIT_MAX_SOURCE_BYTES"} {
 		t.Setenv(k, "")
 	}
 	for k, v := range kv {
@@ -78,5 +78,25 @@ func TestLoad_ReadsEverything(t *testing.T) {
 		IframeIssuerURL: "http://core/iframe-identity", GroupsClaim: "memberships", StaticApps: "{}"}
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)
+	}
+}
+
+func TestLoad_MaxSourceBytes(t *testing.T) {
+	base := map[string]string{"BOOTH_POSTGRES_DSN": "postgres://x", "BOOTH_IFRAME_IDENTITY_ISSUER_URL": "http://core/iframe-identity"}
+	setEnv(t, base)
+	if cfg, err := Load(); err != nil || cfg.MaxSourceBytes != 0 {
+		t.Fatalf("default: %d %v (0 means the apps package default)", cfg.MaxSourceBytes, err)
+	}
+	for _, bad := range []string{"0", "-1", "lots"} {
+		base["BOOTH_STREAMLIT_MAX_SOURCE_BYTES"] = bad
+		setEnv(t, base)
+		if _, err := Load(); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	base["BOOTH_STREAMLIT_MAX_SOURCE_BYTES"] = "4096"
+	setEnv(t, base)
+	if cfg, err := Load(); err != nil || cfg.MaxSourceBytes != 4096 {
+		t.Errorf("4096: %d %v", cfg.MaxSourceBytes, err)
 	}
 }

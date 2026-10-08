@@ -93,6 +93,9 @@ jobs:
           (cd test/integration/browser && npm ci && npx playwright install --with-deps chromium)
           test/integration/iframe-path.sh
 
+      - name: Only workspace owners write apps, with real roles through core (ADR 0105)
+        run: test/integration/api-authz.sh
+
       - name: Dump state on failure
         if: failure()
         run: |

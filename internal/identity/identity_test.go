@@ -66,7 +66,7 @@ func (s *signer) sign(t *testing.T, m mint) string {
 }
 
 func (s *signer) verifier() *Verifier {
-	return newWithKeys(Config{IssuerURL: issuer}, &oidc.StaticKeySet{PublicKeys: []crypto.PublicKey{&s.key.PublicKey}})
+	return NewWithKeySet(Config{IssuerURL: issuer}, &oidc.StaticKeySet{PublicKeys: []crypto.PublicKey{&s.key.PublicKey}})
 }
 
 func req(assertion string, headers ...string) *http.Request {

@@ -72,6 +72,27 @@ try {
     }
   });
   console.log(`info: the app's document can script the embedding page: ${parentReachable}`);
+
+  // --- The module's own page, through core, as the same viewer (core's session cookie is live):
+  // it loads, calls its API with relative URLs, shows the ADR 0105 trust note, and offers a viewer
+  // no authoring controls.
+  const ui = await ctx.newPage();
+  await ui.route(`${base}/__booth_parent_ui`, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><iframe id="ui" src="/iframe/streamlit/" style="width:1200px;height:900px"
+  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"></iframe>`,
+    }),
+  );
+  await ui.goto(`${base}/__booth_parent_ui`);
+  const page2 = ui.frameLocator("#ui");
+  await page2.getByRole("heading", { name: "Streamlit apps" }).waitFor({ timeout: 60_000 });
+  check(
+    (await page2.getByRole("note").textContent())?.includes("App code runs in your browser with access to your Booth session") ?? false,
+    "the module UI shows the trust note (ADR 0105)",
+  );
+  await page2.getByText("Only workspace owners can create or change apps").waitFor({ timeout: 30_000 });
+  check((await page2.getByRole("button", { name: "New app" }).count()) === 0, "a viewer is offered no 'New app'");
   await ctx.close();
 
   // --- A member of another workspace is refused by the module (ADR 0104 item 5).

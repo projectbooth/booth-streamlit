@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/projectbooth/booth-streamlit/internal/api"
+	"github.com/projectbooth/booth-streamlit/internal/apps"
 	"github.com/projectbooth/booth-streamlit/internal/config"
 	"github.com/projectbooth/booth-streamlit/internal/db"
 	"github.com/projectbooth/booth-streamlit/internal/events"
@@ -54,19 +55,25 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	apps, err := proxy.ParseStatic(cfg.StaticApps)
+	store, err := apps.NewPostgresStore(ctx, pool)
 	if err != nil {
 		return err
 	}
-	if len(apps) > 0 {
-		log.Printf("WARNING: serving %d app(s) from BOOTH_STREAMLIT_STATIC_APPS, a test seam that the app model replaces", len(apps))
+	svc := apps.NewService(store, cfg.MaxSourceBytes)
+	static, err := proxy.ParseStatic(cfg.StaticApps)
+	if err != nil {
+		return err
+	}
+	if len(static) > 0 {
+		log.Printf("WARNING: serving %d app(s) from BOOTH_STREAMLIT_STATIC_APPS, a test seam that the app lifecycle replaces", len(static))
 	}
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: api.NewRouter(api.Deps{
 			DB: pool, Bus: bus, Web: api.WebDir(cfg.WebDir),
-			Apps: &proxy.Handler{Verifier: verifier, Apps: apps},
+			Verifier: verifier, Apps: svc,
+			Proxy: &proxy.Handler{Verifier: verifier, Apps: proxy.Chain{static, proxy.AppsResolver{Apps: svc}}},
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

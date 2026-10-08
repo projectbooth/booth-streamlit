@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 // Config is booth-streamlit's full runtime configuration.
@@ -41,6 +42,9 @@ type Config struct {
 	// GroupsClaim is the claim carrying workspace memberships (ADR 0025); must match booth-core's.
 	GroupsClaim string
 
+	// MaxSourceBytes bounds one app's source (0 means the default, 256 KiB).
+	MaxSourceBytes int
+
 	// StaticApps is a fixed app table (JSON; see proxy.ParseStatic) used only until the app model
 	// exists. Empty in a real install.
 	StaticApps string
@@ -58,6 +62,13 @@ func Load() (Config, error) {
 		IframeIssuerURL: os.Getenv("BOOTH_IFRAME_IDENTITY_ISSUER_URL"),
 		GroupsClaim:     getEnv("BOOTH_OIDC_GROUPS_CLAIM", "groups"),
 		StaticApps:      os.Getenv("BOOTH_STREAMLIT_STATIC_APPS"),
+	}
+	if v := os.Getenv("BOOTH_STREAMLIT_MAX_SOURCE_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return Config{}, fmt.Errorf("BOOTH_STREAMLIT_MAX_SOURCE_BYTES must be a positive integer, got %q", v)
+		}
+		cfg.MaxSourceBytes = n
 	}
 
 	if cfg.PostgresDSN == "" {

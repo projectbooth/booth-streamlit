@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+
+	"github.com/projectbooth/booth-streamlit/internal/identity"
 )
 
 // StaticResolver is a fixed id → app table, read from configuration. It exists for build step 1
@@ -46,10 +48,10 @@ func ParseStatic(raw string) (StaticResolver, error) {
 	return out, nil
 }
 
-// Resolve implements Resolver.
-func (s StaticResolver) Resolve(_ context.Context, id string) (App, error) {
+// Resolve implements Resolver. Static apps count as shared with their workspace.
+func (s StaticResolver) Resolve(_ context.Context, c identity.Caller, id string) (App, error) {
 	a, ok := s[id]
-	if !ok {
+	if !ok || a.Workspace != c.Workspace {
 		return App{}, ErrNotFound
 	}
 	return a, nil

@@ -15,8 +15,15 @@ event-bus connection; a placeholder UI (React, TypeScript, Vite, Tailwind) serve
 inside the shell's iframe; the per-app proxy (`/apps/{id}/…`), which verifies booth-core's
 `X-Booth-Identity`, limits access to the app's own workspace, and strips everything replayable
 before user code sees the request; the Streamlit runtime image (`images/app-runtime`); the Helm
-chart; CI. What does not exist yet: the app model (apps are a fixed test table, `staticApps`),
-per-app container lifecycle, and `dashboard.*` publishing. Streamlit runs only inside the per-app
+chart; CI. The app model and its API (`/api/apps`) with the UI to create, edit, share, start, stop
+and delete apps. What does not exist yet: per-app container lifecycle (Start records the desired
+state; nothing runs an app's container yet, so opening one says it is not running), and
+`dashboard.*` publishing.
+
+**Who may do what (ADR 0105, interim while ARCHITECTURE.md item 55 is open):** only owners of the
+app's workspace may create, edit, start, stop or delete apps. Editors and viewers can open apps an
+owner has shared with the workspace. Nobody outside the workspace can see an app. The backend
+enforces this from the verified role; the UI only hides what would be refused. Streamlit runs only inside the per-app
 containers, never in the backend. Design: `docs/design-v0.md`; data access: ADR 0104 (not built).
 
 ## Layout

@@ -1,7 +1,7 @@
-// Package api is booth-streamlit's HTTP surface: the two health endpoints, the per-app proxy
-// (/apps/{id}/..., authenticated by booth-core's X-Booth-Identity, see package proxy), and the
-// module's UI. The UI's static files carry no user data; the app-management API arrives with the
-// app model and is authenticated the same way as the proxy.
+// Package api is booth-streamlit's HTTP surface: the two health endpoints, the app-management API
+// (/api/..., see apps.go), the per-app proxy (/apps/{id}/..., see package proxy), and the module's
+// UI. The API and the proxy are both authenticated by booth-core's X-Booth-Identity on every
+// request; the UI's static files carry no user data.
 package api
 
 import (
@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/projectbooth/booth-streamlit/internal/apps"
 	"github.com/projectbooth/booth-streamlit/internal/events"
 )
 
@@ -37,8 +38,12 @@ type Deps struct {
 	Bus BusState
 	// Web is the built UI (web/dist). Nil serves no UI.
 	Web fs.FS
-	// Apps serves /apps/{id}/...; nil serves no apps.
-	Apps interface{ Mount(chi.Router) }
+	// Proxy serves /apps/{id}/...; nil serves no apps.
+	Proxy interface{ Mount(chi.Router) }
+	// Verifier and Apps serve the app-management API under /api; both are needed for it to be
+	// mounted.
+	Verifier Verifier
+	Apps     *apps.Service
 }
 
 // dbPingTimeout bounds the /healthz database check, so a hung Postgres shows as unhealthy within
@@ -57,8 +62,11 @@ func NewRouter(deps Deps) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	r.Get("/healthz", healthz(deps))
-	if deps.Apps != nil {
-		deps.Apps.Mount(r)
+	if deps.Verifier != nil && deps.Apps != nil {
+		mountAppAPI(r, deps.Verifier, deps.Apps)
+	}
+	if deps.Proxy != nil {
+		deps.Proxy.Mount(r)
 	}
 
 	if deps.Web != nil {
