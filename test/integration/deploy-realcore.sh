@@ -2,13 +2,13 @@
 # Deploys a real Keycloak and a real booth-core (built from a pinned checkout), then booth-streamlit
 # with its chart defaults, so core itself provisions the module's database (ADR 0053) and mints its
 # event-bus credential from the manifest's `events` (ADR 0050), the path a real install takes.
-# Also deploys the hand-started demo app (fixtures/demo-app.yaml) and points the module's
-# static-app seam at it, for iframe-path.sh.
+# The module is installed with test values for the lifecycle checks (lifecycle.sh): a running-app
+# cap of 1 and a 60s idle timeout, and the app runtime image loaded into the cluster.
 #
 #   test/integration/deploy-realcore.sh <booth-core checkout> <core image> <streamlit image> <app-runtime image>
 #
 # All images must already be loaded into the cluster (pullPolicy Never). The test password is
-# generated per run and kept in the Secret keycloak/realcore-test-password for iframe-path.sh.
+# generated per run and kept in the Secret keycloak/realcore-test-password for the later scripts.
 set -euo pipefail
 
 core_dir=$1
@@ -45,17 +45,14 @@ helm upgrade --install booth-core "$core_dir/charts/booth-core" --namespace boot
   --wait --timeout 10m
 kubectl -n booth-system rollout status deploy/booth-core --timeout=300s
 
-echo "--- the hand-started demo app (step 1; the lifecycle replaces it)"
+echo "--- booth-streamlit with chart defaults (database and bus credential from core), lifecycle test values"
 kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
-sed "s|image: booth-streamlit-app-runtime:ci|image: $runtime_image|" "$repo/test/integration/fixtures/demo-app.yaml" \
-  | kubectl -n "$ns" apply -f -
-
-echo "--- booth-streamlit with chart defaults (database and bus credential from core)"
 # No --wait on purpose: the pod cannot start until core has written both Secrets, which it does
 # only after it sees the BoothModule this install creates. verify.sh waits for that explicitly.
 helm upgrade --install booth-streamlit "$repo/charts/booth-streamlit" --namespace "$ns" \
   --set image.repository="${image%:*}" --set image.tag="${image##*:}" --set image.pullPolicy=Never \
-  --set-json 'staticApps="{\"demo\":{\"workspace\":\"acme-analytics\",\"url\":\"http://demo-app:8501\"}}"'
+  --set apps.runtimeImage.repository="${runtime_image%:*}" --set apps.runtimeImage.tag="${runtime_image##*:}" \
+  --set apps.imagePullPolicy=Never \
+  --set apps.maxRunning=1 --set apps.idleTimeout=60s
 
-kubectl -n "$ns" rollout status deploy/demo-app --timeout=300s
 kubectl -n keycloak rollout status deploy/keycloak --timeout=600s

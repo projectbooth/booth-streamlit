@@ -1,0 +1,13 @@
+booth-streamlit is installed in {{ .Release.Namespace }}.
+
+Each app runs as its own Deployment in this namespace, at most {{ .Values.apps.maxRunning }} at once
+(0 = no cap), stopped after {{ .Values.apps.idleTimeout }} without a viewer.
+
+App egress is "{{ .Values.apps.egress.mode }}" (ADR 0104). The NetworkPolicy
+{{ include "booth-streamlit.fullname" . }}-apps is what keeps app code off in-cluster destinations
+(booth-core, other apps, databases) and the cloud metadata address. It is only enforced if this
+cluster's CNI enforces NetworkPolicy (ARCHITECTURE.md item 37b); check before relying on it. Every
+app pod's gate still refuses requests without that app's bearer either way.
+
+Only workspace owners may create, edit, start, stop or delete apps (ADR 0105). App code runs in
+viewers' browsers with access to their Booth session (ARCHITECTURE.md item 55).

@@ -2,21 +2,21 @@
 // inside an iframe on core's own origin (standing in for the shell, which is same-origin with core
 // by construction, ADR 0069), and the app's websocket session works both ways.
 //
-//   node iframe-path.mjs <core base URL> <viewer iframe URL> <viewer sub> <outsider iframe URL>
+//   node iframe-path.mjs <core base URL> <viewer iframe URL> <viewer sub> <outsider iframe URL> <app id>
 //
 // The iframe URLs are core's own (GET /api/modules/streamlit/iframe-url), minted in-cluster from
 // real Keycloak tokens a moment earlier; core's navigation token is valid for one minute.
 import { chromium } from "playwright";
 
-const [base, viewerURL, viewerSub, outsiderURL] = process.argv.slice(2);
-if (!base || !viewerURL || !viewerSub || !outsiderURL) {
-  console.error("usage: node iframe-path.mjs <core base URL> <viewer iframe URL> <viewer sub> <outsider iframe URL>");
+const [base, viewerURL, viewerSub, outsiderURL, appId] = process.argv.slice(2);
+if (!base || !viewerURL || !viewerSub || !outsiderURL || !appId) {
+  console.error("usage: node iframe-path.mjs <core base URL> <viewer iframe URL> <viewer sub> <outsider iframe URL> <app id>");
   process.exit(2);
 }
 
 // Core issues /iframe/streamlit/?<token>; its entry handler accepts any path under the module, so
 // point the same token at the app.
-const toApp = (u) => u.replace(/^\/iframe\/streamlit\/\?/, "/iframe/streamlit/apps/demo/?");
+const toApp = (u) => u.replace(/^\/iframe\/streamlit\/\?/, `/iframe/streamlit/apps/${appId}/?`);
 
 const failures = [];
 const check = (ok, what) => {
@@ -50,6 +50,7 @@ try {
   check(await marker("marker:workspace=acme-analytics").isVisible(), "workspace is the app's workspace");
   check(await marker("marker:role=viewer").isVisible(), "role is the viewer's real role");
   check(await marker("marker:identity-header-visible=False").isVisible(), "X-Booth-Identity never reached user code");
+  check(await marker("marker:gate-token-visible=False").isVisible(), "the gate's bearer never reached user code");
   check(await marker("marker:core-cookie-visible=False").isVisible(), "core's booth_iframe_session cookie never reached user code");
 
   // Browser → app: a widget event goes up the websocket and the rerun's output comes back.
@@ -63,7 +64,7 @@ try {
   // Recorded, not asserted: whether the app's document can script the embedding page. The shell's
   // iframe is same-origin with it (ADR 0069) and sandboxed with allow-same-origin, so it can,
   // which matters here because the app's code is written by someone other than the viewer.
-  const frame = page.frames().find((f) => f.url().includes("/iframe/streamlit/apps/demo/"));
+  const frame = page.frames().find((f) => f.url().includes(`/iframe/streamlit/apps/${appId}/`));
   const parentReachable = await frame.evaluate(() => {
     try {
       return typeof window.parent.document.title === "string";

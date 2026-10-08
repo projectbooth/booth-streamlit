@@ -12,6 +12,7 @@ import (
 
 	"github.com/projectbooth/booth-streamlit/internal/apps"
 	"github.com/projectbooth/booth-streamlit/internal/identity"
+	"github.com/projectbooth/booth-streamlit/internal/lifecycle"
 )
 
 // Verifier is the identity check; *identity.Verifier satisfies it.
@@ -35,7 +36,7 @@ const maxBodyBytes = 1 << 20
 //	DELETE /api/apps/{id}           delete (owners)
 //	POST   /api/apps/{id}/start     desired state running (owners)
 //	POST   /api/apps/{id}/stop      desired state stopped (owners)
-func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service) {
+func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service, status StatusFunc) {
 	r.Route("/api", func(r chi.Router) {
 		r.Use(authenticate(v))
 		r.Get("/me", func(w http.ResponseWriter, r *http.Request) {
@@ -50,10 +51,11 @@ func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service) {
 				writeErr(w, err)
 				return
 			}
-			if list == nil {
-				list = []apps.App{}
+			out := make([]appView, 0, len(list))
+			for _, a := range list {
+				out = append(out, view(a, status))
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"apps": list})
+			writeJSON(w, http.StatusOK, map[string]any{"apps": out})
 		})
 		r.Post("/apps", func(w http.ResponseWriter, r *http.Request) {
 			var in apps.Input
@@ -61,11 +63,11 @@ func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service) {
 				return
 			}
 			a, err := svc.Create(r.Context(), caller(r), in)
-			respond(w, http.StatusCreated, a, err)
+			respond(w, http.StatusCreated, view(a, status), err)
 		})
 		r.Get("/apps/{id}", func(w http.ResponseWriter, r *http.Request) {
 			a, err := svc.Get(r.Context(), caller(r), chi.URLParam(r, "id"))
-			respond(w, http.StatusOK, a, err)
+			respond(w, http.StatusOK, view(a, status), err)
 		})
 		r.Put("/apps/{id}", func(w http.ResponseWriter, r *http.Request) {
 			var in apps.Input
@@ -73,7 +75,7 @@ func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service) {
 				return
 			}
 			a, err := svc.Update(r.Context(), caller(r), chi.URLParam(r, "id"), in)
-			respond(w, http.StatusOK, a, err)
+			respond(w, http.StatusOK, view(a, status), err)
 		})
 		r.Delete("/apps/{id}", func(w http.ResponseWriter, r *http.Request) {
 			if err := svc.Delete(r.Context(), caller(r), chi.URLParam(r, "id")); err != nil {
@@ -82,15 +84,32 @@ func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service) {
 			}
 			w.WriteHeader(http.StatusNoContent)
 		})
-		r.Post("/apps/{id}/start", setState(svc, apps.Running))
-		r.Post("/apps/{id}/stop", setState(svc, apps.Stopped))
+		r.Post("/apps/{id}/start", setState(svc, status, apps.Running))
+		r.Post("/apps/{id}/stop", setState(svc, status, apps.Stopped))
 	})
 }
 
-func setState(svc *apps.Service, st apps.DesiredState) http.HandlerFunc {
+// StatusFunc reports an app's observed state; *lifecycle.Controller.Status satisfies it.
+type StatusFunc func(apps.App) lifecycle.Status
+
+// appView is an app as the API returns it: the stored app plus what the lifecycle observes.
+type appView struct {
+	apps.App
+	Status lifecycle.Status `json:"status"`
+}
+
+func view(a apps.App, status StatusFunc) appView {
+	v := appView{App: a}
+	if status != nil {
+		v.Status = status(a)
+	}
+	return v
+}
+
+func setState(svc *apps.Service, status StatusFunc, st apps.DesiredState) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		a, err := svc.SetDesiredState(r.Context(), caller(r), chi.URLParam(r, "id"), st)
-		respond(w, http.StatusOK, a, err)
+		respond(w, http.StatusOK, view(a, status), err)
 	}
 }
 
@@ -139,7 +158,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-func respond(w http.ResponseWriter, code int, a apps.App, err error) {
+func respond(w http.ResponseWriter, code int, a appView, err error) {
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -153,6 +172,8 @@ func writeErr(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "app not found"})
 	case errors.Is(err, apps.ErrForbidden):
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+	case errors.Is(err, apps.ErrCapacity):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case errors.Is(err, apps.ErrInvalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	default:

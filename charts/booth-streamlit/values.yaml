@@ -1,8 +1,7 @@
 # Default values for booth-streamlit.
 #
-# Scaffold: this chart runs the module backend only. The per-app containers, their resource
-# limits, the running-app cap and the RBAC to create them arrive with the app lifecycle; nothing
-# here starts a Streamlit process yet.
+# The chart runs the module backend. The backend itself creates one Deployment per running app in
+# this namespace (docs/design-v0.md (a)), configured by `apps` below.
 
 replicaCount: 1
 
@@ -67,10 +66,53 @@ identity:
   # The claim carrying workspace memberships (ADR 0025). Must match booth-core's.
   groupsClaim: groups
 
-# TEST SEAM, empty in a real install. A fixed table of apps the proxy serves, used only until the
-# app model exists (build step 1 proves the URL and websocket path with it). JSON:
-#   {"<id>": {"workspace": "<ws>", "url": "http://<host>:<port>"}}
-staticApps: ""
+# Per-app containers (docs/design-v0.md (a)). Sized for a single-node homelab.
+apps:
+  # The Streamlit runtime image (images/app-runtime). Tag defaults to Chart.appVersion.
+  runtimeImage:
+    repository: ghcr.io/projectbooth/booth-streamlit-app-runtime
+    tag: ""
+  # Pull policy for the runtime and gate images in app pods.
+  imagePullPolicy: IfNotPresent
+  # The gate container in every app pod runs from the backend's own image (`image` above).
+  # Per app: Streamlit's container.
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 512Mi}
+  # Per app: the gate.
+  gateResources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {cpu: 100m, memory: 64Mi, ephemeral-storage: 16Mi}
+  # The writable /tmp of each app (the root filesystem is read-only).
+  tmpSizeLimit: 256Mi
+  # How many apps may run at once, install-wide and per workspace (0 = no cap). Raising maxRunning
+  # also needs quota.hard raised.
+  maxRunning: 5
+  maxRunningPerWorkspace: 0
+  # An app with no open browser tab and no request for this long is stopped; opening it again
+  # starts it. 0 disables idle shutdown.
+  idleTimeout: 30m
+  # A websocket (one open tab) is closed after this long; Streamlit's client reconnects and the
+  # viewer's identity is checked again.
+  maxWebsocket: 8h
+  egress:
+    # ADR 0104 item 4: "open" = internet, but no in-cluster or link-local destinations;
+    # "closed" = DNS only. See templates/networkpolicy.yaml.
+    mode: open
+    dns:
+      namespaceSelector: {kubernetes.io/metadata.name: kube-system}
+      podSelector: {k8s-app: kube-dns}
+
+# A ResourceQuota on this namespace, as a backstop below the running-app cap. The defaults fit
+# apps.maxRunning=5 with the default per-app limits, plus the backend and room for one pod being
+# replaced.
+quota:
+  enabled: true
+  hard:
+    pods: "8"
+    limits.cpu: "7"
+    limits.memory: 7Gi
+    limits.ephemeral-storage: 4Gi
 
 podSecurityContext:
   runAsNonRoot: true
@@ -94,6 +136,8 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
+    # Required with quota.enabled (the quota caps ephemeral storage, so every pod must declare it).
+    ephemeral-storage: 256Mi
 
 serviceAccount:
   create: true

@@ -16,9 +16,9 @@ spec:
         booth.projectbooth.io/module: streamlit
     spec:
       serviceAccountName: {{ include "booth-streamlit.serviceAccountName" . }}
-      # No token yet: the scaffold never talks to the Kubernetes API. Starting app containers will
-      # need a namespace-scoped Role, added together with that code, not ahead of it.
-      automountServiceAccountToken: false
+      # The backend runs each app as a Deployment, with exactly the namespace-scoped Role in
+      # rbac.yaml.
+      automountServiceAccountToken: true
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -37,10 +37,34 @@ spec:
               value: {{ required "identity.issuerUrl is required: app traffic is authenticated by booth-core's X-Booth-Identity assertion (ADR 0069)" .Values.identity.issuerUrl | quote }}
             - name: BOOTH_OIDC_GROUPS_CLAIM
               value: {{ .Values.identity.groupsClaim | quote }}
-            {{- with .Values.staticApps }}
-            - name: BOOTH_STREAMLIT_STATIC_APPS
-              value: {{ . | quote }}
-            {{- end }}
+            # The per-app lifecycle (docs/design-v0.md (a)).
+            - name: BOOTH_NAMESPACE
+              valueFrom:
+                fieldRef: {fieldPath: metadata.namespace}
+            - name: BOOTH_SELF_DEPLOYMENT
+              value: {{ include "booth-streamlit.fullname" . | quote }}
+            - name: BOOTH_APP_RUNTIME_IMAGE
+              value: "{{ .Values.apps.runtimeImage.repository }}:{{ .Values.apps.runtimeImage.tag | default .Chart.AppVersion }}"
+            - name: BOOTH_APP_GATE_IMAGE
+              value: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+            - name: BOOTH_APP_IMAGE_PULL_POLICY
+              value: {{ .Values.apps.imagePullPolicy | quote }}
+            - name: BOOTH_APP_SERVICE_ACCOUNT
+              value: "{{ include "booth-streamlit.fullname" . }}-app"
+            - name: BOOTH_APP_RESOURCES
+              value: {{ .Values.apps.resources | toJson | quote }}
+            - name: BOOTH_APP_GATE_RESOURCES
+              value: {{ .Values.apps.gateResources | toJson | quote }}
+            - name: BOOTH_APP_TMP_SIZE_LIMIT
+              value: {{ .Values.apps.tmpSizeLimit | quote }}
+            - name: BOOTH_APP_MAX_RUNNING
+              value: {{ .Values.apps.maxRunning | int | quote }}
+            - name: BOOTH_APP_MAX_RUNNING_PER_WORKSPACE
+              value: {{ .Values.apps.maxRunningPerWorkspace | int | quote }}
+            - name: BOOTH_APP_IDLE_TIMEOUT
+              value: {{ .Values.apps.idleTimeout | quote }}
+            - name: BOOTH_APP_MAX_WEBSOCKET
+              value: {{ .Values.apps.maxWebsocket | quote }}
             - name: BOOTH_POSTGRES_DSN
               valueFrom:
                 secretKeyRef:

@@ -66,10 +66,25 @@ page="$(kubectl get --raw "$svc_proxy/")"
 echo "$page" | grep -q '<title>Streamlit</title>' || fail "UI index not served: $page"
 echo "$page" | grep -q 'src="./assets/' || fail "asset URLs are not relative: $page"
 
-echo "--- no Kubernetes API access for the module's service account"
+echo "--- the backend's Kubernetes API access is exactly its Role (docs/design-v0.md (a)), checked live"
 sa="system:serviceaccount:$ns:booth-streamlit"
-for args in "get secrets -n $ns" "list pods -n $ns" "create pods -n $ns" "get secrets -n kube-system"; do
+for args in "create deployments.apps" "update deployments.apps" "delete deployments.apps" "list deployments.apps" \
+            "create services" "delete services" "create configmaps" "update configmaps" "list configmaps" \
+            "list pods" "create secrets" "delete secrets"; do
+  test "$(kubectl auth can-i $args -n $ns --as="$sa")" = "yes" || fail "the backend needs, and lacks: $args"
+done
+# Never read a Secret (core's credentials live in this namespace), never run a bare pod, never
+# touch RBAC, nothing outside its namespace.
+for args in "get secrets -n $ns" "list secrets -n $ns" "watch secrets -n $ns" "update secrets -n $ns" \
+            "create pods -n $ns" "delete pods -n $ns" "create pods/exec -n $ns" \
+            "create roles -n $ns" "create rolebindings -n $ns" "create clusterroles" \
+            "get secrets -n kube-system" "create deployments.apps -n kube-system" "list deployments.apps -n booth-system"; do
   test "$(kubectl auth can-i $args --as="$sa")" = "no" || fail "unexpectedly ALLOWED: $args"
+done
+echo "--- app pods' service account has no Kubernetes API access at all"
+appsa="system:serviceaccount:$ns:booth-streamlit-app"
+for args in "get pods" "list configmaps" "get secrets" "create deployments.apps"; do
+  test "$(kubectl auth can-i $args -n $ns --as="$appsa")" = "no" || fail "app account ALLOWED: $args"
 done
 
 if [ "${REAL_CORE:-}" = "1" ]; then

@@ -74,7 +74,7 @@ jobs:
           docker build -t booth-streamlit-app-runtime:ci -f images/app-runtime/Dockerfile .
           kind load docker-image booth-core:ci booth-streamlit:ci booth-streamlit-app-runtime:ci --name booth-streamlit-realcore
 
-      - name: Deploy Keycloak, booth-core, booth-streamlit and the demo app
+      - name: Deploy Keycloak, booth-core and booth-streamlit (lifecycle test values)
         run: test/integration/deploy-realcore.sh booth-core booth-core:ci booth-streamlit:ci booth-streamlit-app-runtime:ci
 
       - name: Verify (including the REAL_CORE checks)
@@ -88,13 +88,14 @@ jobs:
           cache: npm
           cache-dependency-path: test/integration/browser/package-lock.json
 
-      - name: Chromium reaches a Streamlit app through core's iframe proxy (URL + websocket path)
-        run: |
-          (cd test/integration/browser && npm ci && npx playwright install --with-deps chromium)
-          test/integration/iframe-path.sh
+      - name: Install Chromium for the browser checks
+        run: cd test/integration/browser && npm ci && npx playwright install --with-deps chromium
 
       - name: Only workspace owners write apps, with real roles through core (ADR 0105)
         run: test/integration/api-authz.sh
+
+      - name: "Lifecycle: start (and Chromium through core), gate, cap, idle, stop, reconcile"
+        run: test/integration/lifecycle.sh
 
       - name: Dump state on failure
         if: failure()
@@ -105,5 +106,7 @@ jobs:
           kubectl -n booth-streamlit get secrets || true
           kubectl -n booth-streamlit describe pods | tail -60
           kubectl -n booth-streamlit logs deployment/booth-streamlit --tail=200 || true
-          kubectl -n booth-streamlit logs deployment/demo-app --tail=100 || true
+          kubectl -n booth-streamlit get deploy,svc,configmap,pods -l booth.projectbooth.io/component=app -o wide || true
+          kubectl -n booth-streamlit logs -l booth.projectbooth.io/component=app --all-containers --tail=80 || true
+          kubectl -n booth-streamlit get events --sort-by=.lastTimestamp | tail -40 || true
           cat /tmp/booth-core-port-forward.log || true

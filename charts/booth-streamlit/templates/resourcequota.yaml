@@ -1,0 +1,16 @@
+{{- if .Values.quota.enabled }}
+# A hard ceiling on this namespace (docs/design-v0.md (a), "Backstop"): even if the backend's
+# running-app cap had a bug, apps couldn't take more of a single node than this. Size it to
+# apps.maxRunning x (app + gate limits) plus the backend; the defaults below match the default
+# values. With a quota on limits, every pod in the namespace must declare limits (the backend and
+# app pods do).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "booth-streamlit.fullname" . }}
+  labels:
+    {{- include "booth-streamlit.labels" . | nindent 4 }}
+spec:
+  hard:
+    {{- toYaml .Values.quota.hard | nindent 4 }}
+{{- end }}

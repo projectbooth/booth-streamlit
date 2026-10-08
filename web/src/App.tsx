@@ -71,14 +71,24 @@ function AppList({ me, onNew, onEdit }: { me: Me; onNew: () => void; onEdit: (id
   );
 }
 
+// "Sleeping" is idle shutdown: opening the app starts it again (internal/lifecycle).
+const STATE_LABELS: Record<BoothApp["status"]["state"], string> = {
+  stopped: "Stopped",
+  suspended: "Sleeping",
+  starting: "Starting",
+  running: "Running",
+  failed: "Failed",
+};
+
 function AppRow({ app, canAuthor, onEdit, act }: { app: BoothApp; canAuthor: boolean; onEdit: () => void; act: (fn: () => Promise<unknown>) => void }) {
   const running = app.desiredState === "running";
+  const label = STATE_LABELS[app.status?.state ?? (running ? "starting" : "stopped")];
   return (
     <li className="flex items-center justify-between gap-4 px-4 py-3">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span className="font-medium">{app.name}</span>
-          <span className="rounded bg-gray-100 px-1.5 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300">{running ? "Running" : "Stopped"}</span>
+          <span className="rounded bg-gray-100 px-1.5 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300">{label}</span>
           {canAuthor && (
             <span className="rounded bg-gray-100 px-1.5 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300">
               {app.shared ? "Shared with workspace" : "Owners only"}
@@ -86,6 +96,9 @@ function AppRow({ app, canAuthor, onEdit, act }: { app: BoothApp; canAuthor: boo
           )}
         </div>
         {app.description && <p className="truncate text-sm text-gray-600 dark:text-gray-400">{app.description}</p>}
+        {canAuthor && app.status?.state === "failed" && app.status.reason && (
+          <p className="text-sm text-red-700 dark:text-red-400">Failed to start: {app.status.reason}</p>
+        )}
       </div>
       <div className="flex shrink-0 gap-2 text-sm">
         <a href={appURL(app.id)} className="rounded border border-gray-300 px-2 py-1 dark:border-gray-700">Open</a>

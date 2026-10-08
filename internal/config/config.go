@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 // Config is booth-streamlit's full runtime configuration.
@@ -45,9 +46,29 @@ type Config struct {
 	// MaxSourceBytes bounds one app's source (0 means the default, 256 KiB).
 	MaxSourceBytes int
 
-	// StaticApps is a fixed app table (JSON; see proxy.ParseStatic) used only until the app model
-	// exists. Empty in a real install.
-	StaticApps string
+	// Lifecycle configures the per-app containers (design note (a)).
+	Lifecycle Lifecycle
+}
+
+// Lifecycle is the per-app container configuration. Every value comes from the chart.
+type Lifecycle struct {
+	// Namespace the backend runs in, where app objects are created (the chart's downward API).
+	Namespace string
+	// SelfDeployment is the backend's own Deployment, which owns every app Deployment.
+	SelfDeployment string
+	RuntimeImage   string
+	// GateImage is the image holding /booth-streamlit-gate: the backend's own image.
+	GateImage      string
+	PullPolicy     string
+	ServiceAccount string
+	// AppResources and GateResources are Kubernetes ResourceRequirements, as JSON.
+	AppResources  string
+	GateResources string
+	TmpSizeLimit  string
+	IdleTimeout   time.Duration
+	MaxWebsocket  time.Duration
+	MaxRunning    int
+	MaxPerWS      int
 }
 
 // Load reads configuration from the environment.
@@ -61,7 +82,17 @@ func Load() (Config, error) {
 
 		IframeIssuerURL: os.Getenv("BOOTH_IFRAME_IDENTITY_ISSUER_URL"),
 		GroupsClaim:     getEnv("BOOTH_OIDC_GROUPS_CLAIM", "groups"),
-		StaticApps:      os.Getenv("BOOTH_STREAMLIT_STATIC_APPS"),
+		Lifecycle: Lifecycle{
+			Namespace:      os.Getenv("BOOTH_NAMESPACE"),
+			SelfDeployment: os.Getenv("BOOTH_SELF_DEPLOYMENT"),
+			RuntimeImage:   os.Getenv("BOOTH_APP_RUNTIME_IMAGE"),
+			GateImage:      os.Getenv("BOOTH_APP_GATE_IMAGE"),
+			PullPolicy:     getEnv("BOOTH_APP_IMAGE_PULL_POLICY", "IfNotPresent"),
+			ServiceAccount: os.Getenv("BOOTH_APP_SERVICE_ACCOUNT"),
+			AppResources:   os.Getenv("BOOTH_APP_RESOURCES"),
+			GateResources:  os.Getenv("BOOTH_APP_GATE_RESOURCES"),
+			TmpSizeLimit:   getEnv("BOOTH_APP_TMP_SIZE_LIMIT", "256Mi"),
+		},
 	}
 	if v := os.Getenv("BOOTH_STREAMLIT_MAX_SOURCE_BYTES"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -81,6 +112,47 @@ func Load() (Config, error) {
 	// publishing: say so at startup rather than leaving apps missing from the catalog.
 	if cfg.NATSCredsFile != "" && cfg.NATSURL == "" {
 		return Config{}, fmt.Errorf("BOOTH_NATS_CREDS_FILE is set but BOOTH_NATS_URL is not: the credentials have no bus to connect to")
+	}
+	l := &cfg.Lifecycle
+	for _, req := range []struct{ name, val string }{
+		{"BOOTH_NAMESPACE", l.Namespace}, {"BOOTH_SELF_DEPLOYMENT", l.SelfDeployment},
+		{"BOOTH_APP_RUNTIME_IMAGE", l.RuntimeImage}, {"BOOTH_APP_GATE_IMAGE", l.GateImage},
+		{"BOOTH_APP_SERVICE_ACCOUNT", l.ServiceAccount},
+	} {
+		if req.val == "" {
+			return Config{}, fmt.Errorf("%s is required: the backend runs every app as its own Deployment", req.name)
+		}
+	}
+	durations := []struct {
+		name string
+		dst  *time.Duration
+		def  time.Duration
+	}{
+		{"BOOTH_APP_IDLE_TIMEOUT", &l.IdleTimeout, 30 * time.Minute},
+		{"BOOTH_APP_MAX_WEBSOCKET", &l.MaxWebsocket, 8 * time.Hour},
+	}
+	for _, d := range durations {
+		*d.dst = d.def
+		if v := os.Getenv(d.name); v != "" {
+			n, err := time.ParseDuration(v)
+			if err != nil || n < 0 {
+				return Config{}, fmt.Errorf("%s must be a non-negative duration such as 30m, got %q", d.name, v)
+			}
+			*d.dst = n
+		}
+	}
+	ints := []struct {
+		name string
+		dst  *int
+	}{{"BOOTH_APP_MAX_RUNNING", &l.MaxRunning}, {"BOOTH_APP_MAX_RUNNING_PER_WORKSPACE", &l.MaxPerWS}}
+	for _, i := range ints {
+		if v := os.Getenv(i.name); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return Config{}, fmt.Errorf("%s must be a non-negative integer (0 = no cap), got %q", i.name, v)
+			}
+			*i.dst = n
+		}
 	}
 	return cfg, nil
 }

@@ -2,6 +2,7 @@
 # platform database (ADR 0014) and booth-core's bus (ADR 0021). Test fixtures only: fixed
 # credentials, no auth on NATS, no persistence. The real-core job replaces both with booth-core's
 # own, which is the authoritative check; this job stays because it isolates the module from core.
+# Both declare limits because the chart puts a ResourceQuota on the namespace.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -29,6 +30,8 @@ spec:
             - {name: POSTGRES_USER, value: booth}
             - {name: POSTGRES_PASSWORD, value: booth-test}
             - {name: POSTGRES_DB, value: booth_streamlit}
+          resources:
+            limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 512Mi}
           ports:
             - containerPort: 5432
           readinessProbe:
@@ -62,6 +65,8 @@ spec:
         - name: nats
           image: nats:2-alpine
           args: ["-js", "-m", "8222"]
+          resources:
+            limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 512Mi}
           ports:
             - {name: client, containerPort: 4222}
             - {name: monitor, containerPort: 8222}

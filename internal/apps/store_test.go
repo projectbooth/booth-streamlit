@@ -48,7 +48,7 @@ func stores(t *testing.T) map[string]Store {
 
 func app(id, ws, name string, shared bool) App {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
-	return App{ID: id, Workspace: ws, Name: name, Source: "src-" + id, Shared: shared, DesiredState: Stopped,
+	return App{ID: id, Workspace: ws, Name: name, Source: "src-" + id, Shared: shared, DesiredState: Stopped, GateBearer: "bearer-" + id,
 		CreatedBy: "o", CreatedAt: now, UpdatedBy: "o", UpdatedAt: now}
 }
 
@@ -65,6 +65,26 @@ func TestStores(t *testing.T) {
 			all, err := s.List(ctx, "acme", false)
 			if err != nil || len(all) != 2 || all[0].Name != "Alpha" || all[1].Name != "beta" || all[0].Source != "" {
 				t.Fatalf("List(acme): %+v %v (want Alpha, beta by case-insensitive name, no source)", all, err)
+			}
+			if all[0].GateBearer != "" {
+				t.Error("List exposes the gate bearer")
+			}
+			every, err := s.ListAll(ctx)
+			if err != nil || len(every) != 3 || every[0].ID != "a1" || every[2].Workspace != "other" || every[0].GateBearer != "bearer-a1" || every[0].Source != "src-a1" {
+				t.Fatalf("ListAll: %+v %v (want all workspaces by id, with source and bearer)", every, err)
+			}
+			if err := s.SetSuspended(ctx, "acme", "a2", true); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := s.Get(ctx, "acme", "a2"); !got.Suspended {
+				t.Error("SetSuspended(true) did not stick")
+			}
+			if err := s.SetSuspended(ctx, "acme", "a3", true); !errors.Is(err, ErrNotFound) {
+				t.Errorf("SetSuspended across workspaces: %v", err)
+			}
+			// An owner's Start or Stop clears suspension.
+			if r, _ := s.SetDesiredState(ctx, "acme", "a2", Running, "o"); r.Suspended {
+				t.Error("SetDesiredState left the app suspended")
 			}
 			if sh, _ := s.List(ctx, "acme", true); len(sh) != 1 || sh[0].ID != "a2" {
 				t.Errorf("List(acme, sharedOnly) = %+v", sh)

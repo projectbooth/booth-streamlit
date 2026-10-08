@@ -8,23 +8,24 @@ modules in the "dashboards/apps" capability slot, alongside `booth-superset` and
 Architecture, contracts and decisions live in `booth-architecture`; this repo's brief is
 `agent-briefs/streamlit.md` there.
 
-## Status: scaffold
+## Status
 
-What exists: the module backend (Go, chi), its manifest, health checks, database connection and
-event-bus connection; a placeholder UI (React, TypeScript, Vite, Tailwind) served by the backend
-inside the shell's iframe; the per-app proxy (`/apps/{id}/…`), which verifies booth-core's
-`X-Booth-Identity`, limits access to the app's own workspace, and strips everything replayable
-before user code sees the request; the Streamlit runtime image (`images/app-runtime`); the Helm
-chart; CI. The app model and its API (`/api/apps`) with the UI to create, edit, share, start, stop
-and delete apps. What does not exist yet: per-app container lifecycle (Start records the desired
-state; nothing runs an app's container yet, so opening one says it is not running), and
-`dashboard.*` publishing.
+Built: the module backend (Go, chi) with its manifest, health checks, database and event-bus
+connections; the app model and API (`/api/apps`); the UI to create, edit, share, start, stop and
+delete apps; and the per-app lifecycle. Each app runs as its own Deployment (Streamlit on
+loopback, behind a gate that requires the app's bearer). The cap on running apps, idle shutdown
+and a reconcile loop come with it. The per-app proxy (`/apps/{id}/...`) verifies booth-core's
+`X-Booth-Identity`, limits access to the app's workspace, and strips everything replayable before
+user code sees a request.
+
+Not built yet: data access (ADR 0104, awaiting core's confirmation on workload minting),
+per-app `pip install`, and `dashboard.*` publishing. Design: `docs/design-v0.md`, including its
+"as built" notes.
 
 **Who may do what (ADR 0105, interim while ARCHITECTURE.md item 55 is open):** only owners of the
 app's workspace may create, edit, start, stop or delete apps. Editors and viewers can open apps an
-owner has shared with the workspace. Nobody outside the workspace can see an app. The backend
-enforces this from the verified role; the UI only hides what would be refused. Streamlit runs only inside the per-app
-containers, never in the backend. Design: `docs/design-v0.md`; data access: ADR 0104 (not built).
+owner has shared with the workspace; opening one that idle shutdown put to sleep wakes it.
+Nobody outside the workspace can see an app. The backend enforces this from the verified role.
 
 ## Layout
 
@@ -33,7 +34,10 @@ containers, never in the backend. Design: `docs/design-v0.md`; data access: ADR 
 | `cmd/streamlit` | Backend entrypoint. |
 | `internal/api` | HTTP: `/livez`, `/healthz`, the per-app proxy, and the UI. |
 | `internal/identity` | Verifies booth-core's `X-Booth-Identity` assertion (ADR 0069, 0041). |
-| `internal/proxy` | The per-app proxy, including Streamlit's websocket. |
+| `internal/proxy` | The per-app proxy, including Streamlit's websocket, idle tracking and the websocket lifetime cap. |
+| `internal/apps` | The app model and every authorization rule (ADR 0105), the running-app cap. |
+| `internal/lifecycle` | One Deployment/Service/ConfigMap/Secret per app, reconcile loop, idle shutdown. |
+| `internal/gate`, `cmd/gate` | The gate in front of Streamlit in every app pod (requires the app's bearer). |
 | `images/app-runtime` | The per-app Streamlit image and the `booth_streamlit` helper. |
 | `internal/config` | Environment-variable configuration, 1:1 with chart values. |
 | `internal/db` | Connection to this module's own database (ADR 0053). |
