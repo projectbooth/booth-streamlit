@@ -1,8 +1,7 @@
-// Package api is booth-streamlit's HTTP surface. In the scaffold that is only the two health
-// endpoints and the module's UI: the app-management API and the per-app reverse proxy arrive with
-// the app model, and with them the X-Booth-Identity verification every non-health route needs
-// (ADR 0069, core-platform-api.md "Auth enforcement"). Nothing served here today reads or writes
-// user data, which is why nothing here is authenticated yet.
+// Package api is booth-streamlit's HTTP surface: the two health endpoints, the per-app proxy
+// (/apps/{id}/..., authenticated by booth-core's X-Booth-Identity, see package proxy), and the
+// module's UI. The UI's static files carry no user data; the app-management API arrives with the
+// app model and is authenticated the same way as the proxy.
 package api
 
 import (
@@ -36,8 +35,10 @@ type BusState interface {
 type Deps struct {
 	DB  Pinger
 	Bus BusState
-	// Web is the built UI (web/dist). Nil serves no UI, only the health endpoints.
+	// Web is the built UI (web/dist). Nil serves no UI.
 	Web fs.FS
+	// Apps serves /apps/{id}/...; nil serves no apps.
+	Apps interface{ Mount(chi.Router) }
 }
 
 // dbPingTimeout bounds the /healthz database check, so a hung Postgres shows as unhealthy within
@@ -56,6 +57,9 @@ func NewRouter(deps Deps) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	r.Get("/healthz", healthz(deps))
+	if deps.Apps != nil {
+		deps.Apps.Mount(r)
+	}
 
 	if deps.Web != nil {
 		r.NotFound(spa(deps.Web))

@@ -1,0 +1,9 @@
+{
+  "name": "booth-streamlit-browser-test",
+  "private": true,
+  "type": "module",
+  "description": "Drives a real Chromium through booth-core's iframe proxy to a Streamlit app (build step 1). Run by test/integration/iframe-path.sh.",
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

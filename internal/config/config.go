@@ -32,6 +32,18 @@ type Config struct {
 	// WebDir is the directory holding the built UI (web/dist). The container image sets it;
 	// empty means no UI is served, which is what local `go run` and the Go tests get.
 	WebDir string
+
+	// IframeIssuerURL is booth-core's iframe-identity issuer (ADR 0069), whose X-Booth-Identity
+	// assertions this module verifies on every non-health request. Compared character-for-character
+	// with the assertion's `iss`.
+	IframeIssuerURL string
+
+	// GroupsClaim is the claim carrying workspace memberships (ADR 0025); must match booth-core's.
+	GroupsClaim string
+
+	// StaticApps is a fixed app table (JSON; see proxy.ParseStatic) used only until the app model
+	// exists. Empty in a real install.
+	StaticApps string
 }
 
 // Load reads configuration from the environment.
@@ -42,10 +54,17 @@ func Load() (Config, error) {
 		NATSURL:       os.Getenv("BOOTH_NATS_URL"),
 		NATSCredsFile: os.Getenv("BOOTH_NATS_CREDS_FILE"),
 		WebDir:        os.Getenv("BOOTH_WEB_DIR"),
+
+		IframeIssuerURL: os.Getenv("BOOTH_IFRAME_IDENTITY_ISSUER_URL"),
+		GroupsClaim:     getEnv("BOOTH_OIDC_GROUPS_CLAIM", "groups"),
+		StaticApps:      os.Getenv("BOOTH_STREAMLIT_STATIC_APPS"),
 	}
 
 	if cfg.PostgresDSN == "" {
 		return Config{}, fmt.Errorf("BOOTH_POSTGRES_DSN is required: app definitions live in this module's own database (ADR 0014/0053)")
+	}
+	if cfg.IframeIssuerURL == "" {
+		return Config{}, fmt.Errorf("BOOTH_IFRAME_IDENTITY_ISSUER_URL is required: every app request is authenticated by booth-core's X-Booth-Identity assertion (ADR 0069)")
 	}
 	// Credentials with nowhere to connect is a wiring mistake, not a reason to run quietly without
 	// publishing: say so at startup rather than leaving apps missing from the catalog.

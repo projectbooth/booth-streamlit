@@ -12,16 +12,22 @@ Architecture, contracts and decisions live in `booth-architecture`; this repo's 
 
 What exists: the module backend (Go, chi), its manifest, health checks, database connection and
 event-bus connection; a placeholder UI (React, TypeScript, Vite, Tailwind) served by the backend
-inside the shell's iframe; the Helm chart; CI. What does not exist yet: apps. No app model, no
-per-app containers, no `dashboard.*` publishing, no identity verification (nothing served today
-reads user data). Streamlit runs only inside the per-app containers, never in the backend.
+inside the shell's iframe; the per-app proxy (`/apps/{id}/…`), which verifies booth-core's
+`X-Booth-Identity`, limits access to the app's own workspace, and strips everything replayable
+before user code sees the request; the Streamlit runtime image (`images/app-runtime`); the Helm
+chart; CI. What does not exist yet: the app model (apps are a fixed test table, `staticApps`),
+per-app container lifecycle, and `dashboard.*` publishing. Streamlit runs only inside the per-app
+containers, never in the backend. Design: `docs/design-v0.md`; data access: ADR 0104 (not built).
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `cmd/streamlit` | Backend entrypoint. |
-| `internal/api` | HTTP: `/livez`, `/healthz`, and the UI. |
+| `internal/api` | HTTP: `/livez`, `/healthz`, the per-app proxy, and the UI. |
+| `internal/identity` | Verifies booth-core's `X-Booth-Identity` assertion (ADR 0069, 0041). |
+| `internal/proxy` | The per-app proxy, including Streamlit's websocket. |
+| `images/app-runtime` | The per-app Streamlit image and the `booth_streamlit` helper. |
 | `internal/config` | Environment-variable configuration, 1:1 with chart values. |
 | `internal/db` | Connection to this module's own database (ADR 0053). |
 | `internal/events` | Event-bus connection (ADR 0050); the `dashboard.*` publisher will live here. |

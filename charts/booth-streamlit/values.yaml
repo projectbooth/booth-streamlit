@@ -56,6 +56,22 @@ nats:
   # eventBus.credentialsSecret.enabled is false.
   url: ""
 
+identity:
+  # booth-core's iframe-identity issuer (ADR 0069). Every request to an app carries core's signed
+  # X-Booth-Identity assertion, verified against this issuer's keys. It must equal core's
+  # BOOTH_IFRAME_IDENTITY_ISSUER_URL EXACTLY: it is compared character-for-character with the
+  # assertion's `iss`, and core's chart spells its default host "...svc.cluster.local:8080", not
+  # the shorter "...svc:8080" other booth URLs use. The default matches core installed as release
+  # "booth-core" in namespace "booth-system" (booth-logging and booth-notebooks use the same).
+  issuerUrl: "http://booth-core.booth-system.svc.cluster.local:8080/iframe-identity"
+  # The claim carrying workspace memberships (ADR 0025). Must match booth-core's.
+  groupsClaim: groups
+
+# TEST SEAM, empty in a real install. A fixed table of apps the proxy serves, used only until the
+# app model exists (build step 1 proves the URL and websocket path with it). JSON:
+#   {"<id>": {"workspace": "<ws>", "url": "http://<host>:<port>"}}
+staticApps: ""
+
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532

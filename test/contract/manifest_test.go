@@ -352,3 +352,33 @@ func TestChart_PodHardening(t *testing.T) {
 		t.Errorf("no CPU/memory limits on the backend:\n%s", dep)
 	}
 }
+
+// Every app request is authenticated against core's iframe-identity issuer (ADR 0069). The default
+// must be spelled exactly as core's chart publishes it, and an empty value must refuse to render.
+func TestChart_IframeIdentityIssuer(t *testing.T) {
+	dep := string(helmTemplate(t, "templates/deployment.yaml"))
+	if !regexp.MustCompile(`BOOTH_IFRAME_IDENTITY_ISSUER_URL\s+value: "http://booth-core\.booth-system\.svc\.cluster\.local:8080/iframe-identity"`).MatchString(dep) {
+		t.Errorf("default issuer is not core's exact spelling:\n%s", dep)
+	}
+	if !regexp.MustCompile(`BOOTH_OIDC_GROUPS_CLAIM\s+value: "groups"`).MatchString(dep) {
+		t.Error("default groups claim should be \"groups\", matching booth-core")
+	}
+	out, err := helm(t, "template", "x", chartDir(), "--set", "identity.issuerUrl=")
+	if err == nil {
+		t.Fatalf("rendered with no identity issuer:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("identity.issuerUrl is required")) {
+		t.Errorf("failure message not actionable:\n%s", out)
+	}
+}
+
+// The static-app test seam is off unless set.
+func TestChart_StaticAppsAreOffByDefault(t *testing.T) {
+	if bytes.Contains(helmTemplate(t, "templates/deployment.yaml"), []byte("BOOTH_STREAMLIT_STATIC_APPS")) {
+		t.Error("the static-app test seam is rendered in a default install")
+	}
+	on := helmTemplate(t, "templates/deployment.yaml", "--set-json", `staticApps="{\"demo\":{\"workspace\":\"acme\",\"url\":\"http://demo:8501\"}}"`)
+	if !bytes.Contains(on, []byte("BOOTH_STREAMLIT_STATIC_APPS")) {
+		t.Error("staticApps not rendered when set")
+	}
+}

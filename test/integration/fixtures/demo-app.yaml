@@ -1,0 +1,79 @@
+# A hand-started Streamlit app (build step 1): the runtime image running a fixed script, reached
+# only through the module's proxy as app "demo" in workspace acme-analytics. The lifecycle code
+# replaces this hand-made Deployment in step 3.
+#
+# The script prints, as plain markers the browser test reads:
+#   - that the websocket session works at all (Streamlit renders script output only over it);
+#   - who the module's proxy says the viewer is (booth_streamlit.user());
+#   - whether anything replayable reached user code: core's X-Booth-Identity assertion and core's
+#     booth_iframe_session cookie must both be absent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-app
+data:
+  app.py: |
+    import streamlit as st
+    import booth_streamlit
+
+    st.title("booth-streamlit demo app")
+    u = booth_streamlit.user()
+    st.write(f"marker:user={u.subject if u else 'none'}")
+    st.write(f"marker:workspace={u.workspace if u else 'none'}")
+    st.write(f"marker:role={u.role if u else 'none'}")
+    headers = {k.lower() for k in st.context.headers.keys()}
+    st.write(f"marker:identity-header-visible={'x-booth-identity' in headers}")
+    st.write(f"marker:core-cookie-visible={'booth_iframe_session' in st.context.cookies}")
+    if st.button("Rerun"):
+        st.write("marker:button-roundtrip=ok")
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: demo-app}
+  template:
+    metadata:
+      labels: {app: demo-app}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: streamlit
+          image: booth-streamlit-app-runtime:ci
+          imagePullPolicy: Never
+          env:
+            - {name: STREAMLIT_SERVER_BASE_URL_PATH, value: apps/demo}
+          ports:
+            - {name: http, containerPort: 8501}
+          readinessProbe:
+            httpGet: {path: /apps/demo/_stcore/health, port: http}
+            periodSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: app, mountPath: /app, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: app
+          configMap: {name: demo-app}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app
+spec:
+  selector: {app: demo-app}
+  ports:
+    - {name: http, port: 8501, targetPort: http}

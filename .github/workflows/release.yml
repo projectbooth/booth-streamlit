@@ -40,6 +40,16 @@ jobs:
             ghcr.io/projectbooth/booth-streamlit:${{ steps.version.outputs.version }}
             ghcr.io/projectbooth/booth-streamlit:latest
 
+      - name: App runtime image (the per-app Streamlit container)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/app-runtime/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/projectbooth/booth-streamlit-app-runtime:${{ steps.version.outputs.version }}
+            ghcr.io/projectbooth/booth-streamlit-app-runtime:latest
+
   chart:
     needs: image
     runs-on: ubuntu-24.04

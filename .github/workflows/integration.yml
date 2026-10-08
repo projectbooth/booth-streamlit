@@ -42,7 +42,6 @@ jobs:
           kubectl -n booth-streamlit get all
           kubectl -n booth-streamlit describe pods | tail -60
           kubectl -n booth-streamlit logs deployment/booth-streamlit --tail=200 || true
-
   real-core:
     # The install path a user actually takes: booth-core provisions the database and mints the
     # bus credential from this chart's BoothModule. booth-core is built at a pinned commit, not its
@@ -65,22 +64,34 @@ jobs:
 
       - uses: azure/setup-helm@v4
 
-      - name: Build and load booth-core and booth-streamlit images
+      - name: Build and load booth-core, booth-streamlit and app-runtime images
         run: |
           # dependency build (not update) installs exactly what core's Chart.lock pins.
           helm repo add nats https://nats-io.github.io/k8s/helm/charts/
           helm dependency build booth-core/charts/booth-core
           docker build -t booth-core:ci booth-core
           docker build -t booth-streamlit:ci .
-          kind load docker-image booth-core:ci booth-streamlit:ci --name booth-streamlit-realcore
+          docker build -t booth-streamlit-app-runtime:ci -f images/app-runtime/Dockerfile .
+          kind load docker-image booth-core:ci booth-streamlit:ci booth-streamlit-app-runtime:ci --name booth-streamlit-realcore
 
-      - name: Deploy booth-core and booth-streamlit
-        run: test/integration/deploy-realcore.sh booth-core booth-core:ci booth-streamlit:ci
+      - name: Deploy Keycloak, booth-core, booth-streamlit and the demo app
+        run: test/integration/deploy-realcore.sh booth-core booth-core:ci booth-streamlit:ci booth-streamlit-app-runtime:ci
 
       - name: Verify (including the REAL_CORE checks)
         env:
           REAL_CORE: "1"
         run: test/integration/verify.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: test/integration/browser/package-lock.json
+
+      - name: Chromium reaches a Streamlit app through core's iframe proxy (URL + websocket path)
+        run: |
+          (cd test/integration/browser && npm ci && npx playwright install --with-deps chromium)
+          test/integration/iframe-path.sh
 
       - name: Dump state on failure
         if: failure()
@@ -91,3 +102,5 @@ jobs:
           kubectl -n booth-streamlit get secrets || true
           kubectl -n booth-streamlit describe pods | tail -60
           kubectl -n booth-streamlit logs deployment/booth-streamlit --tail=200 || true
+          kubectl -n booth-streamlit logs deployment/demo-app --tail=100 || true
+          cat /tmp/booth-core-port-forward.log || true
