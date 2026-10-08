@@ -153,7 +153,16 @@ A=$(echo "$body" | json 'd.id')
 api "$owner2" POST /api/apps "{\"name\":\"Data B\",\"description\":\"\",\"source\":$src,\"shared\":true}"; [ "$code" = 201 ] || fail "create B: $code $body"
 B=$(echo "$body" | json 'd.id')
 api "$owner" POST "/api/apps/$A/start"; [ "$code" = 200 ] || fail "start A: $code $body"
-for _ in $(seq 1 120); do [ -n "$(app_pod "$A")" ] && [ "$(kubectl -n "$ns" get deploy "app-$A" -o jsonpath='{.status.readyReplicas}')" = 1 ] && break; sleep 2; done
+# Keep A active the way a viewer does: a request through core's iframe proxy every 10s. The install
+# uses a 60s idle timeout (for lifecycle.sh), and `kubectl exec` below never goes through the
+# module's proxy, so without this idle shutdown would suspend A mid-test (it did, on the first run).
+# A request also wakes A if it was suspended.
+( while true; do curl -s -o /dev/null -H "Cookie: booth_iframe_session=$owner2" "$core/iframe/streamlit/apps/$A/_stcore/health"; sleep 10; done ) &
+keepalive=$!
+trap 'kill $pf1 $pf2 $keepalive 2>/dev/null || true' EXIT
+ready=""
+for _ in $(seq 1 120); do [ -n "$(app_pod "$A")" ] && [ "$(kubectl -n "$ns" get deploy "app-$A" -o jsonpath='{.status.readyReplicas}')" = 1 ] && { ready=1; break; }; sleep 2; done
+[ -n "$ready" ] || { kubectl -n "$ns" describe deploy "app-$A" | tail -20; fail "app A never became ready"; }
 echo "apps: A=$A (owner-user) B=$B (owner2-user)"
 
 step "1. reads as its owner: the app queries a Postgres table through DATABASE_URL"
