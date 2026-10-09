@@ -338,3 +338,8 @@ Built as item 5 describes. Details the plan didn't spell out:
   at build time into `/opt/booth/duckdb`. `duckdb_secret()` loads them from there, so the lakehouse
   reads through DuckDB with no download at runtime, closed egress included. The extensions come
   from DuckDB's repository at image build time and aren't digest-pinned; the DuckDB wheel is.
+- **Idle shutdown counts a viewer waiting on the starting page as activity** (a change to step 3's
+  rule, found by real-core run 37954610250). Before, only requests to a running app counted, so an
+  app whose start outlasted the idle timeout (a long install) was suspended mid-start with the
+  viewer still there. A failed or stopped app's page still doesn't count, so an app whose install
+  keeps failing goes idle and stops retrying.

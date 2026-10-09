@@ -139,6 +139,12 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 	var failed *FailedError
 	switch {
 	case errors.Is(err, ErrStarting):
+		// A viewer waiting on the starting page (it refreshes itself) is activity: without this, an
+		// app whose start outlasts the idle timeout (a long pip install) was suspended mid-start
+		// with the viewer still there. A failed app isn't touched, so it still goes idle.
+		if h.Activity != nil {
+			h.Activity.Touch(chi.URLParam(r, "id"))
+		}
 		unavailable(w, r, err.Error(), true)
 		return
 	case errors.Is(err, ErrNotRunning), errors.Is(err, ErrBusy), errors.As(err, &failed):
