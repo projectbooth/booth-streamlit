@@ -10,3 +10,6 @@ web/dist
 web/*.tsbuildinfo
 **/*_test.go
 *.md
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
