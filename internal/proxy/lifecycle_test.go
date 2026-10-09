@@ -159,3 +159,27 @@ func TestLifecycleResolver(t *testing.T) {
 		t.Errorf("wake at the cap: %d %q", code, body)
 	}
 }
+
+// answers resolves every id to one error.
+type answers struct{ err error }
+
+func (a answers) Resolve(context.Context, identity.Caller, string) (App, error) { return App{}, a.err }
+
+// A viewer on the starting page counts as activity (a long install isn't suspended under them); a
+// failed or stopped app's page doesn't, so a broken app still goes idle.
+func TestProxy_StartingPageIsActivityFailedIsNot(t *testing.T) {
+	for _, tc := range []struct {
+		err     error
+		touches int
+	}{{ErrStarting, 1}, {&FailedError{Reason: "pip install failed"}, 0}, {ErrNotRunning, 0}} {
+		rec := &recorder{}
+		r := chi.NewRouter()
+		(&Handler{Verifier: fakeVerifier{}, Apps: answers{tc.err}, Activity: rec}).Mount(r)
+		srv := httptest.NewServer(r)
+		do(t, srv, "/apps/demo/", map[string]string{identity.HeaderIdentity: "good-acme"})
+		srv.Close()
+		if touches, _, _ := rec.counts(); touches != tc.touches {
+			t.Errorf("%v: touches = %d, want %d", tc.err, touches, tc.touches)
+		}
+	}
+}
