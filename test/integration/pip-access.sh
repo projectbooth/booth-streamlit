@@ -147,8 +147,15 @@ echo "$reason" | grep -q "^pip install did not finish within 60s" || fail "the r
 step "7. apps.egress.mode=closed with no index rule: the failure says so"
 set_requirements "$P1" "booth-it-hello==1.0.0"
 stop_app "$P1"
-helm upgrade booth-streamlit "$repo/charts/booth-streamlit" -n "$ns" --reuse-values \
-  --set apps.egress.mode=closed --set apps.pip.egress.podSelector=null >/dev/null
+# The release's own values, edited: `--reuse-values --set ...podSelector=null` left the key in
+# place (run 37957521351), so the values go in whole with -f, and the saved copy restores them.
+helm get values booth-streamlit -n "$ns" -o json >/tmp/streamlit-values.json
+node -e '
+const fs = require("fs"); const v = JSON.parse(fs.readFileSync("/tmp/streamlit-values.json", "utf8"));
+v.apps.egress = Object.assign({}, v.apps.egress, {mode: "closed"});
+delete v.apps.pip.egress;
+fs.writeFileSync("/tmp/streamlit-values-closed.json", JSON.stringify(v));'
+helm upgrade booth-streamlit "$repo/charts/booth-streamlit" -n "$ns" -f /tmp/streamlit-values-closed.json >/dev/null
 kubectl -n "$ns" rollout status deploy/booth-streamlit --timeout=300s >/dev/null
 closed=$(kubectl -n "$ns" get deploy booth-streamlit -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="BOOTH_APP_PIP_EGRESS_CLOSED")].value}')
 rules=$(kubectl -n "$ns" get networkpolicy -o yaml | grep -c "booth-pypi" || true)
@@ -163,8 +170,7 @@ set -- $r; [ "$1" = failed ] || fail "with closed egress the install did not fai
 t_closed=$2
 echo "$reason" | grep -q "^pip install needs internet access, and apps.egress.mode is closed" || fail "the closed-egress wording is missing"
 stop_app "$P1"
-helm upgrade booth-streamlit "$repo/charts/booth-streamlit" -n "$ns" --reuse-values \
-  --set apps.egress.mode=open --set apps.pip.egress.podSelector.app=pypi >/dev/null
+helm upgrade booth-streamlit "$repo/charts/booth-streamlit" -n "$ns" -f /tmp/streamlit-values.json >/dev/null
 kubectl -n "$ns" rollout status deploy/booth-streamlit --timeout=300s >/dev/null
 
 echo "timing: ready without requirements ${t_plain}s; with one requirement ${t_pip}s (pip itself ${t_install:-?}s);" \
