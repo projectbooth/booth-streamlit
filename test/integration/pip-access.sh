@@ -43,7 +43,8 @@ set_requirements() { # ID REQUIREMENTS
   [ "$code" = 200 ] || fail "update $1: $code $body"
 }
 # wait_for ID STATE SECONDS: polls the app's status every second until STATE (or failed); prints
-# "<state> <seconds> <states seen>" and leaves the last answer in $body.
+# "<state> <seconds> <states seen>". It runs in $(...), a subshell, so it can't hand back $body:
+# reason_of reads the app again in the caller's shell (run 37952130970 read a stale $body).
 wait_for() {
   local start now st seen=""
   start=$(date +%s)
@@ -59,6 +60,7 @@ wait_for() {
     sleep 1
   done
 }
+reason_of() { api "$owner2" GET "/api/apps/$1"; echo "$body" | json 'd.status.reason||""'; }
 start_app() { echo "$1" >/tmp/pip-current; api "$owner2" POST "/api/apps/$1/start"; [ "$code" = 200 ] || fail "start $1: $code $body"; }
 stop_app() { api "$owner2" POST "/api/apps/$1/stop"; echo "" >/tmp/pip-current; }
 
@@ -73,7 +75,7 @@ stop_app "$P0"
 P1=$(create "Pip app" "booth-it-hello==1.0.0")
 start_app "$P1"
 r=$(wait_for "$P1" running 240); echo "one requirement: $r"
-set -- $r; [ "$1" = running ] || fail "the app with a requirement did not start: $r  $(echo "$body" | json 'd.status.reason||""')"
+set -- $r; [ "$1" = running ] || fail "the app with a requirement did not start: $r  $(reason_of "$P1")"
 t_pip=$2
 echo "$r" | grep -q " installing" || echo "note: 'installing' was not observed (the install took less than the 1s poll)"
 pod=$(wait_pod "$P1")
@@ -126,7 +128,7 @@ echo "$scan"
 step "5. a bad requirement fails the app and shows pip's output to the owner"
 set_requirements "$P1" "booth-it-does-not-exist==9.9"
 r=$(wait_for "$P1" failed 180); echo "bad requirement: $r"
-reason=$(echo "$body" | json 'd.status.reason||""')
+reason=$(reason_of "$P1")
 echo "reason: $reason"
 set -- $r; [ "$1" = failed ] || fail "a bad requirement did not fail the app: $r"
 t_bad=$2
@@ -136,7 +138,7 @@ echo "$reason" | grep -q "No matching distribution found for booth-it-does-not-e
 step "6. a hung install fails at apps.pip.timeout (60s here), not 'starting' forever"
 set_requirements "$P1" "booth-it-slow"
 r=$(wait_for "$P1" failed 240); echo "hung install: $r"
-reason=$(echo "$body" | json 'd.status.reason||""')
+reason=$(reason_of "$P1")
 echo "reason: $reason"
 set -- $r; [ "$1" = failed ] || fail "a hung install did not fail the app within 240s: $r"
 t_hang=$2
@@ -155,7 +157,7 @@ echo "backend BOOTH_APP_PIP_EGRESS_CLOSED=$closed; app egress rules naming booth
 for _ in $(seq 1 30); do api "$owner2" GET "/api/apps/$P1"; [ "$code" = 200 ] && break; sleep 2; done
 start_app "$P1"
 r=$(wait_for "$P1" failed 240); echo "closed egress: $r"
-reason=$(echo "$body" | json 'd.status.reason||""')
+reason=$(reason_of "$P1")
 echo "reason: $reason"
 set -- $r; [ "$1" = failed ] || fail "with closed egress the install did not fail: $r"
 t_closed=$2
