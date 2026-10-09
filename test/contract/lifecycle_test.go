@@ -224,3 +224,40 @@ func TestChart_LifecycleConfiguration(t *testing.T) {
 		t.Error("BOOTH_NAMESPACE must come from the pod's own namespace")
 	}
 }
+
+// Per-app packages (design-data-access item 5): the chart's apps.pip reaches the backend; an
+// in-cluster index gets an egress rule only with both selectors; the egress-closed explanation is
+// on exactly when egress is closed and no index egress is configured.
+func TestChart_Pip(t *testing.T) {
+	env := func(extra ...string) map[string]string {
+		dep := string(helmTemplate(t, "templates/deployment.yaml", extra...))
+		out := map[string]string{}
+		for _, m := range regexp.MustCompile(`name: (BOOTH_APP_PIP_\w+)\s+value: "([^"]*)"`).FindAllStringSubmatch(dep, -1) {
+			out[m[1]] = m[2]
+		}
+		return out
+	}
+	if got, want := env(), map[string]string{
+		"BOOTH_APP_PIP_INDEX_URL": "", "BOOTH_APP_PIP_TIMEOUT": "5m", "BOOTH_APP_PIP_SITE_SIZE_LIMIT": "1Gi", "BOOTH_APP_PIP_EGRESS_CLOSED": "false",
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("defaults %v, want %v", got, want)
+	}
+	if env("--set", "apps.egress.mode=closed")["BOOTH_APP_PIP_EGRESS_CLOSED"] != "true" {
+		t.Error("closed egress without an index rule must say so")
+	}
+	index := []string{"--set", "apps.pip.indexUrl=http://pypi.booth-pypi.svc:8080/simple", "--set", "apps.pip.egress.podSelector.app=pypi",
+		"--set", `apps.pip.egress.namespaceSelector.kubernetes\.io/metadata\.name=booth-pypi`}
+	if got := env(append(index, "--set", "apps.egress.mode=closed")...); got["BOOTH_APP_PIP_EGRESS_CLOSED"] != "false" || got["BOOTH_APP_PIP_INDEX_URL"] != "http://pypi.booth-pypi.svc:8080/simple" {
+		t.Errorf("closed egress with an index rule: %v", got)
+	}
+	if pol := string(helmTemplate(t, "templates/networkpolicy.yaml")); strings.Contains(pol, "package index") {
+		t.Error("index egress rendered without its selectors")
+	}
+	pol := string(helmTemplate(t, "templates/networkpolicy.yaml", index...))
+	if !strings.Contains(pol, "kubernetes.io/metadata.name: booth-pypi") || !strings.Contains(pol, "app: pypi") || !strings.Contains(pol, "port: 8080") {
+		t.Errorf("no index egress with its selectors:\n%s", pol)
+	}
+	if out, err := helm(t, "template", "booth-streamlit", chartDir(), "--set", "apps.pip.egress.podSelector.app=pypi"); err == nil {
+		t.Errorf("a podSelector without a namespaceSelector rendered:\n%s", out)
+	}
+}

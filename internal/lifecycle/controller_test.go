@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -705,5 +706,167 @@ func TestDeployment_WarehouseLookupFailureStartsWithoutIt(t *testing.T) {
 				t.Errorf("%s set without a warehouse", e.Name)
 			}
 		}
+	}
+}
+
+func (r *rig) createWithRequirements(name, req string) apps.App {
+	r.t.Helper()
+	a, err := r.svc.Create(r.ctx, owner, apps.Input{Name: name, Source: "import streamlit as st\nst.write('hi')", Requirements: req, Shared: true})
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return a
+}
+
+// design-data-access item 5: the pip init container runs unvetted install steps, so it mounts the
+// source (read only) and the empty site volume, and nothing else: no token, no bearer, no S3 keys,
+// even with every data-access sidecar in the pod. Streamlit gets site read only, on PYTHONPATH.
+func TestDeployment_PipInitContainer(t *testing.T) {
+	r, _ := lakeRig(t, acmeWarehouse, nil)
+	r.c.cfg.Pip = PipConfig{IndexURL: "http://pypi.booth-pypi.svc:8080/simple", Deadline: 90 * time.Second, SiteSizeLimit: "1Gi", EgressClosed: true}
+	a := r.createWithRequirements("Sales", "humanize==4.12.0\n")
+	r.start(a)
+	d := r.deployment(a.ID)
+	spec := d.Spec.Template.Spec
+
+	if len(spec.InitContainers) != 1 || spec.InitContainers[0].Name != "pip" {
+		t.Fatalf("init containers %v", spec.InitContainers)
+	}
+	pip := spec.InitContainers[0]
+	mounts := map[string]string{}
+	for _, m := range pip.VolumeMounts {
+		mounts[m.Name] = fmt.Sprintf("%s ro=%v", m.MountPath, m.ReadOnly)
+	}
+	if want := map[string]string{"source": "/app ro=true", "site": "/opt/booth/site ro=false"}; !reflect.DeepEqual(mounts, want) {
+		t.Errorf("pip mounts %v, want exactly %v (no token, bearer or credentials)", mounts, want)
+	}
+	if len(pip.EnvFrom) != 0 {
+		t.Error("pip has envFrom")
+	}
+	env := map[string]string{}
+	for _, e := range pip.Env {
+		if e.ValueFrom != nil {
+			t.Errorf("pip env %s comes from a secret or field", e.Name)
+		}
+		env[e.Name] = e.Value
+	}
+	if want := map[string]string{
+		"BOOTH_PIP_REQUIREMENTS": "/app/requirements.txt", "BOOTH_PIP_TARGET": "/opt/booth/site",
+		"BOOTH_PIP_DEADLINE_SECONDS": "90", "BOOTH_PIP_EGRESS_CLOSED": "true", "PIP_INDEX_URL": "http://pypi.booth-pypi.svc:8080/simple",
+	}; !reflect.DeepEqual(env, want) {
+		t.Errorf("pip env %v, want %v", env, want)
+	}
+	if !reflect.DeepEqual(pip.Command, []string{"python", "-m", "booth_streamlit.pip_install"}) || pip.Image != "runtime:1" {
+		t.Errorf("pip runs %v from %s", pip.Command, pip.Image)
+	}
+	if *pip.SecurityContext.RunAsUser != 65532 || !*pip.SecurityContext.ReadOnlyRootFilesystem || *pip.SecurityContext.AllowPrivilegeEscalation {
+		t.Error("pip must run as 65532, read-only, without privilege escalation")
+	}
+	if spec.AutomountServiceAccountToken == nil || *spec.AutomountServiceAccountToken {
+		t.Error("the pod mounts a service-account token")
+	}
+
+	st := container(t, d, "streamlit")
+	stEnv := map[string]string{}
+	for _, e := range st.Env {
+		stEnv[e.Name] = e.Value
+	}
+	if stEnv["PYTHONPATH"] != "/opt/booth/lib:/opt/booth/site" {
+		t.Errorf("PYTHONPATH %q", stEnv["PYTHONPATH"])
+	}
+	var site *corev1.VolumeMount
+	for i := range st.VolumeMounts {
+		if st.VolumeMounts[i].Name == "site" {
+			site = &st.VolumeMounts[i]
+		}
+	}
+	if site == nil || !site.ReadOnly || site.MountPath != "/opt/booth/site" {
+		t.Errorf("streamlit site mount %+v: want read only at /opt/booth/site", site)
+	}
+	for _, v := range spec.Volumes {
+		if v.Name == "site" && (v.EmptyDir == nil || v.EmptyDir.SizeLimit.String() != "1Gi" || v.EmptyDir.Medium != "") {
+			t.Errorf("site volume %+v: want a 1Gi disk emptyDir", v)
+		}
+	}
+	// The site volume counts: the streamlit container's ephemeral-storage limit grew by 1Gi (the
+	// rig's app limits set none).
+	if got := st.Resources.Limits[corev1.ResourceEphemeralStorage]; got.String() != "1Gi" {
+		t.Errorf("streamlit ephemeral-storage limit %s, want 1Gi more than without requirements", got.String())
+	}
+	if _, set := r.c.cfg.AppResources.Limits[corev1.ResourceEphemeralStorage]; set {
+		t.Error("growing the streamlit container's limit changed the shared AppResources")
+	}
+	cm, _ := r.client.CoreV1().ConfigMaps(ns).Get(r.ctx, "app-"+a.ID+"-src", metav1.GetOptions{})
+	if cm.Data["requirements.txt"] != "humanize==4.12.0\n" {
+		t.Errorf("configmap %v", cm.Data)
+	}
+}
+
+// Without requirements there is no init container, and an existing app's pod hash is unchanged
+// (so upgrading the module doesn't roll every app). Changing requirements rolls the pod.
+func TestDeployment_RequirementsRollThePod(t *testing.T) {
+	r := newRig(t)
+	a := r.create("Sales")
+	r.reconcile()
+	d := r.deployment(a.ID)
+	if len(d.Spec.Template.Spec.InitContainers) != 0 {
+		t.Fatal("init container without requirements")
+	}
+	if d.Spec.Template.Annotations[annoSourceHash] != hashOf(a.Source) {
+		t.Error("the source hash of an app without requirements changed")
+	}
+	before := d.Spec.Template.Annotations[annoSourceHash]
+	if _, err := r.svc.Update(r.ctx, owner, a.ID, apps.Input{Name: a.Name, Source: a.Source, Requirements: "humanize\n", Shared: a.Shared}); err != nil {
+		t.Fatal(err)
+	}
+	r.reconcile()
+	d = r.deployment(a.ID)
+	if d.Spec.Template.Annotations[annoSourceHash] == before || len(d.Spec.Template.Spec.InitContainers) != 1 {
+		t.Fatal("adding requirements did not roll the pod into one with the pip init container")
+	}
+	cm, _ := r.client.CoreV1().ConfigMaps(ns).Get(r.ctx, "app-"+a.ID+"-src", metav1.GetOptions{})
+	if cm.Data["requirements.txt"] != "humanize\n" {
+		t.Errorf("configmap not updated with the requirements: %v", cm.Data)
+	}
+}
+
+// Status while installing, and after a failed install: the termination message reaches the owner,
+// and a failed install never sits in "starting".
+func TestObserve_Pip(t *testing.T) {
+	a := apps.App{ID: "a1", DesiredState: apps.Running}
+	d := &appsv1.Deployment{}
+	d.Spec.Template.Annotations = map[string]string{annoSourceHash: "h1"}
+	pod := func(cs corev1.ContainerStatus, hash string) []corev1.Pod {
+		p := corev1.Pod{}
+		p.Annotations = map[string]string{annoSourceHash: hash}
+		cs.Name = "pip"
+		p.Status.InitContainerStatuses = []corev1.ContainerStatus{cs}
+		return []corev1.Pod{p}
+	}
+	running := corev1.ContainerStatus{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}
+	if st := observe(a, d, pod(running, "h1")); st.State != StateInstalling {
+		t.Errorf("installing: %+v", st)
+	}
+	failed := corev1.ContainerStatus{State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: "pip install failed (exit 1):\nERROR: No matching distribution found for nope\n"}}}
+	if st := observe(a, d, pod(failed, "h1")); st.State != StateFailed || st.Reason != "pip install failed (exit 1):\nERROR: No matching distribution found for nope" {
+		t.Errorf("failed: %+v", st)
+	}
+	// The kubelet retries with back-off: the last attempt failed. Still failed, never "installing".
+	retry := corev1.ContainerStatus{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: "pip install did not finish within 60s"}}}
+	if st := observe(a, d, pod(retry, "h1")); st.State != StateFailed || !strings.HasPrefix(st.Reason, "pip install did not finish") {
+		t.Errorf("retrying: %+v", st)
+	}
+	oom := corev1.ContainerStatus{State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}}}
+	if st := observe(a, d, pod(oom, "h1")); st.Reason != "pip install ran out of memory (the app's memory limit)" {
+		t.Errorf("oom: %+v", st)
+	}
+	// A pod from an older source (being replaced) doesn't speak for the app.
+	if st := observe(a, d, pod(failed, "old")); st.State != StateStarting {
+		t.Errorf("an old pod's failure leaked: %+v", st)
+	}
+	done := corev1.ContainerStatus{State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}
+	if st := observe(a, d, pod(done, "h1")); st.State != StateStarting {
+		t.Errorf("installed, streamlit starting: %+v", st)
 	}
 }

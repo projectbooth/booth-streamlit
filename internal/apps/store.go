@@ -66,7 +66,7 @@ func (m *MemoryStore) List(_ context.Context, workspace string, sharedOnly bool)
 	var out []App
 	for _, a := range m.apps {
 		if a.Workspace == workspace && (!sharedOnly || a.Shared) {
-			a.Source, a.GateBearer = "", ""
+			a.Source, a.Requirements, a.GateBearer = "", "", ""
 			out = append(out, a)
 		}
 	}
@@ -104,7 +104,7 @@ func (m *MemoryStore) Update(_ context.Context, a App) error {
 	if !ok || cur.Workspace != a.Workspace {
 		return ErrNotFound
 	}
-	cur.Name, cur.Description, cur.Source, cur.Shared = a.Name, a.Description, a.Source, a.Shared
+	cur.Name, cur.Description, cur.Source, cur.Requirements, cur.Shared = a.Name, a.Description, a.Source, a.Requirements, a.Shared
 	cur.UpdatedBy, cur.UpdatedAt = a.UpdatedBy, a.UpdatedAt
 	m.apps[a.ID] = cur
 	return nil

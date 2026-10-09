@@ -54,6 +54,12 @@ const (
 	streamlitPort = 8501
 	bearerKey     = "bearer"
 	sourceKey     = "app.py"
+	reqKey        = "requirements.txt"
+
+	// Per-app packages: the pip init container installs into siteDir, which the Streamlit
+	// container mounts read only, after the image's own /opt/booth/lib on PYTHONPATH.
+	siteDir    = "/opt/booth/site"
+	pythonPath = "/opt/booth/lib:" + siteDir
 )
 
 // Warehouse is a workspace's lakehouse warehouse, as booth-lakehouse's GET /api/warehouse answers
@@ -97,13 +103,27 @@ func hashOf(v any) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
-func sourceHash(a apps.App) string { return hashOf(a.Source) }
+// sourceHash covers everything delivered with the source: a change to either rolls the pod.
+func sourceHash(a apps.App) string {
+	if a.Requirements == "" {
+		return hashOf(a.Source) // unchanged for apps without requirements, so they don't roll
+	}
+	return hashOf([]string{a.Source, a.Requirements})
+}
 
 func configMap(ns string, a apps.App) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: configMapName(a.ID), Namespace: ns, Labels: labels(a)},
-		Data:       map[string]string{sourceKey: a.Source},
+		Data:       configData(a),
 	}
+}
+
+func configData(a apps.App) map[string]string {
+	d := map[string]string{sourceKey: a.Source}
+	if a.Requirements != "" {
+		d[reqKey] = a.Requirements
+	}
+	return d
 }
 
 func secret(ns string, a apps.App) *corev1.Secret {
@@ -207,6 +227,9 @@ func deployment(cfg Config, a apps.App, wh *Warehouse) *appsv1.Deployment {
 		},
 	}
 	whAnno := ""
+	if a.Requirements != "" {
+		addPip(cfg, &tpl.Spec, readOnly)
+	}
 	if cfg.Data != nil {
 		addDataAccess(cfg, a, &tpl.Spec, readOnly)
 		if wh != nil {
@@ -228,6 +251,69 @@ func deployment(cfg Config, a apps.App, wh *Warehouse) *appsv1.Deployment {
 	}
 	d.Annotations = map[string]string{annoSpecHash: hashOf(d.Spec), annoWarehouse: whAnno}
 	return d
+}
+
+// addPip installs the app's requirements.txt on every pod start (ADR 0107; docs/design-data-access.md
+// item 5): an init container from the runtime image runs booth_streamlit.pip_install into the
+// "site" volume, which the Streamlit container then mounts read only, on PYTHONPATH.
+//
+// The init container runs unvetted packages' install steps, so it mounts exactly two things: the
+// app's source (read only, for requirements.txt) and the empty site volume. No token, no bearer,
+// no credentials, and the pod has no service-account token. Data access only ever adds to the
+// regular containers, never to this one.
+func addPip(cfg Config, spec *corev1.PodSpec, sc corev1.SecurityContext) {
+	pip := cfg.Pip
+	size := resource.MustParse(pip.SiteSizeLimit)
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name:         "site",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &size}},
+	})
+	env := []corev1.EnvVar{
+		{Name: "BOOTH_PIP_REQUIREMENTS", Value: "/app/" + reqKey},
+		{Name: "BOOTH_PIP_TARGET", Value: siteDir},
+		{Name: "BOOTH_PIP_DEADLINE_SECONDS", Value: fmt.Sprint(int(pip.Deadline.Seconds()))},
+		{Name: "BOOTH_PIP_EGRESS_CLOSED", Value: fmt.Sprint(pip.EgressClosed)},
+	}
+	if pip.IndexURL != "" {
+		env = append(env, corev1.EnvVar{Name: "PIP_INDEX_URL", Value: pip.IndexURL})
+	}
+	uid := appUID
+	pipSC := sc
+	pipSC.RunAsUser, pipSC.RunAsGroup = &uid, &uid
+	spec.InitContainers = append(spec.InitContainers, corev1.Container{
+		Name:            "pip",
+		Image:           cfg.RuntimeImage,
+		ImagePullPolicy: cfg.PullPolicy,
+		Command:         []string{"python", "-m", "booth_streamlit.pip_install"},
+		Env:             env,
+		// The app's own limits: a pod's effective limit is the larger of its init containers' and
+		// the sum of its containers', so the install costs the quota nothing extra.
+		Resources:                cfg.AppResources,
+		SecurityContext:          &pipSC,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "source", MountPath: "/app", ReadOnly: true},
+			{Name: "site", MountPath: siteDir},
+		},
+	})
+	for i := range spec.Containers {
+		c := &spec.Containers[i]
+		if c.Name != "streamlit" {
+			continue
+		}
+		c.Env = append(c.Env, corev1.EnvVar{Name: "PYTHONPATH", Value: pythonPath})
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "site", MountPath: siteDir, ReadOnly: true})
+		// The site volume is on the node's disk and counts against the pod's ephemeral storage, so
+		// the container's limit (and with it the namespace quota) grows by its size limit.
+		c.Resources = *c.Resources.DeepCopy()
+		if c.Resources.Limits == nil {
+			c.Resources.Limits = corev1.ResourceList{}
+		}
+		eph := c.Resources.Limits[corev1.ResourceEphemeralStorage]
+		eph.Add(size)
+		c.Resources.Limits[corev1.ResourceEphemeralStorage] = eph
+	}
 }
 
 // warehouseOf reads back the warehouse a Deployment was built with (nil for none).

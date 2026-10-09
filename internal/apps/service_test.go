@@ -3,6 +3,7 @@ package apps
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/projectbooth/booth-streamlit/internal/identity"
@@ -147,5 +148,38 @@ func TestOnChangeFiresOnEveryLifecycleRelevantWrite(t *testing.T) {
 	_, _ = s.SetDesiredState(ctx, acmeViewer, b.ID, Running)
 	if n != 0 {
 		t.Error("a refused write fired OnChange")
+	}
+}
+
+// requirements.txt (design-data-access item 5): at most 16 KiB of UTF-8, package specifiers only.
+// The index is the operator's (apps.pip.indexUrl), so no line may be a pip option.
+func TestRequirements(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(NewMemoryStore(), 0)
+	ok := "# comment\nrequests==2.32.3\n\nhumanize>=4 ; python_version >= '3.10'\n"
+	a, err := s.Create(ctx, acmeOwner, Input{Name: "a", Source: "x", Requirements: ok})
+	if err != nil || a.Requirements != ok {
+		t.Fatalf("create with requirements: %v %q", err, a.Requirements)
+	}
+	got, _ := s.Get(ctx, acmeOwner, a.ID)
+	if got.Requirements != ok {
+		t.Errorf("stored requirements %q", got.Requirements)
+	}
+	for name, r := range map[string]string{
+		"index url":   "--index-url http://evil/simple\nrequests\n",
+		"extra index": "requests\n  --extra-index-url=http://evil\n",
+		"nested file": "-r /etc/passwd\n",
+		"editable":    "-e .\n",
+		"constraints": "-c c.txt\n",
+		"too big":     strings.Repeat("a\n", MaxRequirementsBytes/2+1),
+		"not utf-8":   "requests\xff\n",
+		"nul":         "requests\x00\n",
+	} {
+		if _, err := s.Update(ctx, acmeOwner, a.ID, Input{Name: "a", Source: "x", Requirements: r}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: want ErrInvalid, got %v", name, err)
+		}
+	}
+	if _, err := s.Update(ctx, acmeOwner, a.ID, Input{Name: "a", Source: "x", Requirements: ""}); err != nil {
+		t.Errorf("clearing requirements: %v", err)
 	}
 }

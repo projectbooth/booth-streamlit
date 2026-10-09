@@ -20,6 +20,8 @@ export interface App {
   name: string;
   description: string;
   source?: string;
+  /** The app's requirements.txt, installed into its pod on every start. */
+  requirements?: string;
   shared: boolean;
   desiredState: "running" | "stopped";
   suspended: boolean;
@@ -28,7 +30,7 @@ export interface App {
   /** Set while core refuses to mint for the owner: the app runs, its data doesn't. */
   dataPausedReason?: string;
   /** What the lifecycle observes (internal/lifecycle). */
-  status: { state: "stopped" | "suspended" | "starting" | "running" | "failed"; reason?: string };
+  status: { state: "stopped" | "suspended" | "starting" | "installing" | "running" | "failed"; reason?: string };
   createdBy: string;
   createdAt: string;
   updatedBy: string;
@@ -39,6 +41,7 @@ export interface AppInput {
   name: string;
   description: string;
   source: string;
+  requirements: string;
   shared: boolean;
 }
 

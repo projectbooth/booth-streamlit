@@ -297,3 +297,44 @@ Built as item 3 describes. Details the plan didn't spell out:
   and claims only that the workload token and the bearer are unreadable. Keys copied out before a pause
   keep working until their lease expires; real-core shows this, informationally.
 - **Quota:** a second sidecar per pod raises the defaults to `limits.cpu: 9` and `limits.memory: 8Gi`.
+
+## As built: step d, per-app packages
+
+Built as item 5 describes. Details the plan didn't spell out:
+
+- **requirements.txt is package specifiers only.** A line starting with `-` (an index URL, another
+  file, an editable install) is refused when the app is saved: the package index is the operator's
+  (`apps.pip.indexUrl`, given to pip as `PIP_INDEX_URL`), not the app's. Anything else pip can't
+  parse shows up as the install failure.
+- **The installer is `booth_streamlit.pip_install`, in the runtime image,** run as the `pip` init
+  container. pip gets `--no-cache-dir --target /opt/booth/site --timeout 20 --retries 2 -r
+  /app/requirements.txt`, with its HOME and TMPDIR inside the site volume (the root filesystem is
+  read only). It empties the target first, because a restarted init container finds the previous
+  attempt's files.
+- **A hung install can't leave the app "starting".** pip's `--timeout` is per network read, so a
+  server that trickles bytes never trips it (measured: a page sending one byte every 5s outlived
+  it). The installer kills pip at `apps.pip.timeout` (default 5m), writes why, and exits 1. The app
+  then shows **Failed** with that message. The kubelet retries the init container with back-off,
+  and the app keeps showing Failed meanwhile; an edit to the requirements rolls the pod.
+- **The owner sees the failure:** the init container's termination message is the tail of pip's
+  output (at most 20 lines and 2,500 bytes, under Kubernetes' 4,096). The backend reads it from the
+  pod status it already lists, and the UI shows it to owners, keeping its line breaks. With
+  `apps.egress.mode=closed` and no index egress rule, a failure that couldn't connect starts with
+  "pip install needs internet access, and apps.egress.mode is closed". A bad requirement isn't
+  blamed on the network.
+- **States:** "Installing packages" while the init container runs, then the usual states.
+- **What the init container mounts:** the source ConfigMap (read only) and the empty site volume,
+  nothing else. It also logs its own view of its mounts from `/proc/self/mounts`, which real-core
+  checks.
+- **Storage:** the site volume is a disk `emptyDir` of `apps.pip.siteSizeLimit` (1Gi). The
+  Streamlit container's ephemeral-storage limit grows by that much, so it counts in the quota
+  (default raised to 10Gi). The init container takes the app's own limits, which costs the quota
+  nothing extra (a pod's effective limit is the larger of the two).
+- **Apps without requirements are unchanged:** no init container, and the same pod-template hash as
+  before, so upgrading the module doesn't roll them.
+- **An in-cluster index** (a mirror or proxy) needs `apps.pip.egress`, an egress rule by selectors.
+  NetworkPolicy is per pod, so app code can reach that index too.
+- **DuckDB is in the runtime image now** (1.5.6), with its `httpfs` and `aws` extensions installed
+  at build time into `/opt/booth/duckdb`. `duckdb_secret()` loads them from there, so the lakehouse
+  reads through DuckDB with no download at runtime, closed egress included. The extensions come
+  from DuckDB's repository at image build time and aren't digest-pinned; the DuckDB wheel is.

@@ -105,6 +105,12 @@ type Lifecycle struct {
 	MaxWebsocket  time.Duration
 	MaxRunning    int
 	MaxPerWS      int
+	// Per-app packages (an app's requirements.txt), from the chart's apps.pip.
+	PipIndexURL      string
+	PipTimeout       time.Duration
+	PipSiteSizeLimit string
+	// PipEgressClosed: apps.egress.mode is closed and no package-index egress is configured.
+	PipEgressClosed bool
 }
 
 // Load reads configuration from the environment.
@@ -128,7 +134,19 @@ func Load() (Config, error) {
 			AppResources:   os.Getenv("BOOTH_APP_RESOURCES"),
 			GateResources:  os.Getenv("BOOTH_APP_GATE_RESOURCES"),
 			TmpSizeLimit:   getEnv("BOOTH_APP_TMP_SIZE_LIMIT", "256Mi"),
+
+			PipIndexURL:      os.Getenv("BOOTH_APP_PIP_INDEX_URL"),
+			PipSiteSizeLimit: getEnv("BOOTH_APP_PIP_SITE_SIZE_LIMIT", "1Gi"),
+			PipEgressClosed:  os.Getenv("BOOTH_APP_PIP_EGRESS_CLOSED") == "true",
 		},
+	}
+	cfg.Lifecycle.PipTimeout = 5 * time.Minute
+	if v := os.Getenv("BOOTH_APP_PIP_TIMEOUT"); v != "" {
+		n, err := time.ParseDuration(v)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("BOOTH_APP_PIP_TIMEOUT must be a positive duration, got %q", v)
+		}
+		cfg.Lifecycle.PipTimeout = n
 	}
 	if v := os.Getenv("BOOTH_STREAMLIT_MAX_SOURCE_BYTES"); v != "" {
 		n, err := strconv.Atoi(v)

@@ -75,6 +75,22 @@ spec:
         - {protocol: TCP, port: {{ .Values.dataAccess.lakehouse.egress.port }}}
     {{- end }}
     {{- end }}
+    {{- if .Values.apps.pip.egress.podSelector }}
+    {{- if not .Values.apps.pip.egress.namespaceSelector }}
+    {{- fail "apps.pip.egress.namespaceSelector is required with its podSelector (empty would match every namespace)" }}
+    {{- end }}
+    # An in-cluster package index for the pip init container (apps.pip). Per pod, so app code can
+    # reach it too.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.apps.pip.egress.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.apps.pip.egress.podSelector | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.apps.pip.egress.port }}}
+    {{- end }}
     {{- if eq .Values.apps.egress.mode "open" }}
     - to:
         - ipBlock:

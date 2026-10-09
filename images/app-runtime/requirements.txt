@@ -4,3 +4,7 @@ streamlit==1.64.0
 # DATABASE_URL (the postgres credential sidecar on loopback, ADR 0107) works with any Postgres
 # client; psycopg 3 is the one the image ships.
 psycopg[binary]==3.3.6
+# The lakehouse (ADR 0107): booth_streamlit.duckdb_secret() points DuckDB at the warehouse. Its httpfs
+# and aws extensions are installed into the image at build time (Dockerfile), so reading needs no
+# download at runtime and works with apps.egress.mode=closed.
+duckdb==1.5.6

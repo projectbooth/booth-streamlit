@@ -62,6 +62,15 @@ spec:
               value: {{ .Values.apps.gateResources | toJson | quote }}
             - name: BOOTH_APP_TMP_SIZE_LIMIT
               value: {{ .Values.apps.tmpSizeLimit | quote }}
+            - name: BOOTH_APP_PIP_INDEX_URL
+              value: {{ .Values.apps.pip.indexUrl | quote }}
+            - name: BOOTH_APP_PIP_TIMEOUT
+              value: {{ .Values.apps.pip.timeout | quote }}
+            - name: BOOTH_APP_PIP_SITE_SIZE_LIMIT
+              value: {{ .Values.apps.pip.siteSizeLimit | quote }}
+            # Closed egress and no index egress rule: pip can't reach any index, so say so.
+            - name: BOOTH_APP_PIP_EGRESS_CLOSED
+              value: {{ and (eq .Values.apps.egress.mode "closed") (not .Values.apps.pip.egress.podSelector) | quote }}
             - name: BOOTH_APP_MAX_RUNNING
               value: {{ .Values.apps.maxRunning | int | quote }}
             - name: BOOTH_APP_MAX_RUNNING_PER_WORKSPACE

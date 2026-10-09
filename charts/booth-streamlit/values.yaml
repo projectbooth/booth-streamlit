@@ -85,6 +85,27 @@ apps:
     limits: {cpu: 100m, memory: 64Mi, ephemeral-storage: 16Mi}
   # The writable /tmp of each app (the root filesystem is read-only).
   tmpSizeLimit: 256Mi
+  # Per-app packages (ADR 0107; docs/design-data-access.md item 5): an app may have a
+  # requirements.txt (package specifiers only, at most 16 KiB). An init container from the runtime
+  # image installs it on every pod start, with no token, bearer or credentials mounted, into a
+  # volume the app then reads on PYTHONPATH. Nothing is cached between starts.
+  pip:
+    # The package index (PIP_INDEX_URL). Empty: pip's default, PyPI, reached through
+    # apps.egress.mode=open. An in-cluster mirror also needs apps.pip.egress below.
+    indexUrl: ""
+    # The whole install's limit: a pip that hangs fails the app with a clear message instead of
+    # leaving it starting. pip's own --timeout (20s) is per network read and doesn't catch a slow
+    # trickle.
+    timeout: 5m
+    # Room for the installed packages; added to the app container's ephemeral-storage limit, so it
+    # counts in the quota.
+    siteSizeLimit: 1Gi
+    # An in-cluster package index: its selectors and port add an egress rule for app pods (both
+    # selectors required). NetworkPolicy is per pod, so app code can reach the index too.
+    egress:
+      namespaceSelector: {}
+      podSelector: {}
+      port: 8080
   # How many apps may run at once, install-wide and per workspace (0 = no cap). Raising maxRunning
   # also needs quota.hard raised.
   maxRunning: 5
@@ -164,13 +185,15 @@ dataAccess:
 # A ResourceQuota on this namespace, as a backstop below the running-app cap. The defaults fit
 # apps.maxRunning=5 with the default per-app limits (including both data-access sidecars), plus the
 # backend and room for one pod being replaced: 6 x 1.3 CPU + 0.5 = 8.3; 6 x 1.19Gi + 0.25Gi = 7.4Gi.
+# Ephemeral storage assumes every app has packages: 6 x (0.56Gi + 1Gi apps.pip.siteSizeLimit)
+# + 0.25Gi = 9.6Gi.
 quota:
   enabled: true
   hard:
     pods: "8"
     limits.cpu: "9"
     limits.memory: 8Gi
-    limits.ephemeral-storage: 4Gi
+    limits.ephemeral-storage: 10Gi
 
 podSecurityContext:
   runAsNonRoot: true

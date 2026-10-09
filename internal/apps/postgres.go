@@ -27,12 +27,12 @@ func NewPostgresStore(ctx context.Context, pool *pgxpool.Pool) (*PostgresStore, 
 	return &PostgresStore{pool: pool}, nil
 }
 
-const cols = `id, workspace, name, description, source, shared, desired_state, suspended, gate_bearer, owner, data_paused_reason, data_paused_at, data_epoch, created_by, created_at, updated_by, updated_at`
+const cols = `id, workspace, name, description, source, requirements, shared, desired_state, suspended, gate_bearer, owner, data_paused_reason, data_paused_at, data_epoch, created_by, created_at, updated_by, updated_at`
 
 func scanApp(row pgx.Row) (App, error) {
 	var a App
 	var st string
-	if err := row.Scan(&a.ID, &a.Workspace, &a.Name, &a.Description, &a.Source, &a.Shared, &st, &a.Suspended, &a.GateBearer, &a.Owner, &a.DataPausedReason, &a.DataPausedAt, &a.DataEpoch, &a.CreatedBy, &a.CreatedAt, &a.UpdatedBy, &a.UpdatedAt); err != nil {
+	if err := row.Scan(&a.ID, &a.Workspace, &a.Name, &a.Description, &a.Source, &a.Requirements, &a.Shared, &st, &a.Suspended, &a.GateBearer, &a.Owner, &a.DataPausedReason, &a.DataPausedAt, &a.DataEpoch, &a.CreatedBy, &a.CreatedAt, &a.UpdatedBy, &a.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return App{}, ErrNotFound
 		}
@@ -60,7 +60,7 @@ func (s *PostgresStore) List(ctx context.Context, workspace string, sharedOnly b
 		if err != nil {
 			return nil, err
 		}
-		a.Source, a.GateBearer = "", ""
+		a.Source, a.Requirements, a.GateBearer = "", "", ""
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -71,8 +71,8 @@ func (s *PostgresStore) Get(ctx context.Context, workspace, id string) (App, err
 }
 
 func (s *PostgresStore) Create(ctx context.Context, a App) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO apps (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-		a.ID, a.Workspace, a.Name, a.Description, a.Source, a.Shared, string(a.DesiredState), a.Suspended, a.GateBearer,
+	_, err := s.pool.Exec(ctx, `INSERT INTO apps (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+		a.ID, a.Workspace, a.Name, a.Description, a.Source, a.Requirements, a.Shared, string(a.DesiredState), a.Suspended, a.GateBearer,
 		a.Owner, a.DataPausedReason, a.DataPausedAt, a.DataEpoch, a.CreatedBy, a.CreatedAt, a.UpdatedBy, a.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("creating app: %w", err)
@@ -81,8 +81,8 @@ func (s *PostgresStore) Create(ctx context.Context, a App) error {
 }
 
 func (s *PostgresStore) Update(ctx context.Context, a App) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE apps SET name = $3, description = $4, source = $5, shared = $6, updated_by = $7, updated_at = $8
-		WHERE workspace = $1 AND id = $2`, a.Workspace, a.ID, a.Name, a.Description, a.Source, a.Shared, a.UpdatedBy, a.UpdatedAt)
+	tag, err := s.pool.Exec(ctx, `UPDATE apps SET name = $3, description = $4, source = $5, shared = $6, updated_by = $7, updated_at = $8, requirements = $9
+		WHERE workspace = $1 AND id = $2`, a.Workspace, a.ID, a.Name, a.Description, a.Source, a.Shared, a.UpdatedBy, a.UpdatedAt, a.Requirements)
 	if err != nil {
 		return fmt.Errorf("updating app: %w", err)
 	}

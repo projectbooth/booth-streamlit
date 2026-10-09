@@ -8,7 +8,8 @@
 #
 #   0. acme-analytics gets a warehouse (an s3 backend on MinIO, then booth-lakehouse's PUT, as its
 #      owner); an app started after that gets the s3 sidecar, read only, scoped to the warehouse
-#   1. the owner's app reads a Parquet file from the warehouse through booth_streamlit.pyarrow_fs()
+#   1. the owner's app reads a Parquet file from the warehouse through booth_streamlit.pyarrow_fs(),
+#      and through DuckDB with booth_streamlit.duckdb_secret()
 #   2. it cannot write there: the lease is read (the owner is a workspace owner; the app is capped
 #      at viewer and asks for read)
 #   3. the S3 keys file IS readable by user code, as ADR 0107 accepts (item 8.3 of the plan)
@@ -84,6 +85,16 @@ except Exception as e:
 out=$(as_user_code "$A" "$READ" "$key")
 echo "$out"
 echo "$out" | grep -qx "rows=north:10,south:20" || fail "the app could not read the warehouse's Parquet file"
+# The same file through DuckDB (in the runtime image since step d, its extensions preinstalled).
+out=$(as_user_code "$A" '
+import sys, duckdb, booth_streamlit as b
+con = duckdb.connect()
+b.duckdb_secret(con)
+rows = con.execute("SELECT region, sales FROM read_parquet(?) ORDER BY region", [sys.argv[1]]).fetchall()
+print("duckdb=" + ",".join("%s:%s" % r for r in rows))
+print("duckdb-version=" + duckdb.__version__)' "$root/streamlit-it/sales.parquet")
+echo "$out"
+echo "$out" | grep -qx "duckdb=north:10,south:20" || fail "DuckDB could not read the warehouse's Parquet file through duckdb_secret()"
 
 step "2. the lease is read: writing to the warehouse is refused by the object store"
 out=$(as_user_code "$A" '
