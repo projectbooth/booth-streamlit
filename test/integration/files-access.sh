@@ -83,7 +83,11 @@ for label, method, path in [x.split(" ", 2) for x in sys.argv[1:]]:
     r = c.getresponse()
     body = r.read(300).decode(errors="replace").replace("\n", " ")
     print(label, r.status, body[:160])'
-raw() { kubectl -n "$ns" exec "$(app_pod "$A")" -c streamlit -- python -c "$RAW" "$@"; }
+raw() {
+  local pod
+  pod=$(wait_pod "$A") || return 1
+  kubectl -n "$ns" exec "$pod" -c streamlit -- python -c "$RAW" "$@"
+}
 
 step "1. reads a storage object and a catalog file dataset through booth_streamlit.files"
 out=$(as_user_code "$A" "
@@ -124,7 +128,7 @@ for label, path in [x.split(" ", 1) for x in sys.argv[3:]]:
             print(label, r.status, r.read(80).decode())
     except e.HTTPError as err:
         print(label, err.code)'
-out=$(kubectl -n "$ns" exec "$(app_pod "$A")" -c streamlit -- python -c "$STEAL" "http://booth-streamlit.$ns.svc:8081" "$bearer_b" \
+out=$(kubectl -n "$ns" exec "$(wait_pod "$A")" -c streamlit -- python -c "$STEAL" "http://booth-streamlit.$ns.svc:8081" "$bearer_b" \
   "a-object /files/storage/files/sales/q1.csv" "a-dataset /files/datasets/$ds" "a-content /files/datasets/$ds/content/sales/q1.csv" \
   "b-own /files/storage/other-files/theirs/x.csv")
 echo "$out"

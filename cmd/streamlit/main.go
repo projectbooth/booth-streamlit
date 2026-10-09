@@ -72,7 +72,13 @@ func run() error {
 	svc := apps.NewService(store, cfg.MaxSourceBytes)
 	svc.SetCaps(apps.Caps{MaxRunning: cfg.Lifecycle.MaxRunning, MaxRunningPerWorkspace: cfg.Lifecycle.MaxPerWS})
 
-	ctrl, err := newLifecycle(ctx, cfg.Lifecycle, cfg.Data, svc)
+	// One token cache per backend: the gates' refresh, the file proxy and the warehouse lookup all
+	// use an app's same current token.
+	var tokens *dataaccess.Tokens
+	if cfg.Data.Enabled {
+		tokens = &dataaccess.Tokens{Minter: &dataaccess.CoreMinter{URL: cfg.Data.MintURL, Credential: cfg.Data.MintCredential}, MaxAge: cfg.Data.RefreshMax}
+	}
+	ctrl, err := newLifecycle(ctx, cfg.Lifecycle, cfg.Data, svc, tokens)
 	if err != nil {
 		return err
 	}
@@ -81,7 +87,7 @@ func run() error {
 		// reach it; nothing else should (NetworkPolicy), and it never goes through core.
 		in := &dataaccess.Internal{
 			Apps:    svc,
-			Tokens:  &dataaccess.Tokens{Minter: &dataaccess.CoreMinter{URL: cfg.Data.MintURL, Credential: cfg.Data.MintCredential}, MaxAge: cfg.Data.RefreshMax},
+			Tokens:  tokens,
 			CoreURL: cfg.Data.CoreURL,
 			// The file read proxy: storage and catalog files through core's gateway, as the app.
 			Files: &dataaccess.Files{
@@ -140,7 +146,7 @@ func run() error {
 
 // newLifecycle builds the per-app controller from the in-cluster Kubernetes API. The backend's own
 // Deployment is read once, to own every app Deployment (so uninstalling removes all apps).
-func newLifecycle(ctx context.Context, l config.Lifecycle, d config.Data, svc *apps.Service) (*lifecycle.Controller, error) {
+func newLifecycle(ctx context.Context, l config.Lifecycle, d config.Data, svc *apps.Service, tokens *dataaccess.Tokens) (*lifecycle.Controller, error) {
 	rc, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("kubernetes config: %w (the backend must run in the cluster it starts apps in)", err)
@@ -186,6 +192,16 @@ func newLifecycle(ctx context.Context, l config.Lifecycle, d config.Data, svc *a
 		}
 		if d.RefreshMax > 0 {
 			data.RefreshMax = d.RefreshMax.String()
+		}
+		if d.Lakehouse {
+			lh := &dataaccess.Lakehouse{GatewayURL: d.CoreURL, Tokens: tokens}
+			data.Lakehouse = func(ctx context.Context, a apps.App) (*lifecycle.Warehouse, error) {
+				wh, err := lh.Lookup(ctx, a)
+				if wh == nil || err != nil {
+					return nil, err
+				}
+				return &lifecycle.Warehouse{BackendID: wh.BackendID, Path: wh.Path, StorageRoot: wh.StorageRoot}, nil
+			}
 		}
 	}
 	return lifecycle.New(lifecycle.Config{

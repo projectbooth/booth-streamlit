@@ -91,7 +91,26 @@ kc_groups() { # USER add|remove GROUP-PATH
 # Empty while the app has no Running pod (e.g. mid-roll: the Recreate strategy stops the old pod
 # before starting the new one). Never fails: under set -e a bare `p=$(app_pod)` would otherwise end
 # the script silently, which it did in CI run 37838444181.
-app_pod() { kubectl -n "$ns" get pod -l "booth.projectbooth.io/app-id=$1" --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | awk '{print $1}' || true; }
-as_user_code() { # APP-ID PYTHON-CODE: runs it in the app's streamlit container
-  kubectl -n "$ns" exec "$(app_pod "$1")" -c streamlit -- python -c "$2"
+# A pod being deleted still reports phase Running until it is gone, so those are skipped too.
+app_pod() {
+  kubectl -n "$ns" get pod -l "booth.projectbooth.io/app-id=$1" --field-selector=status.phase=Running \
+    -o go-template='{{range .items}}{{if not .metadata.deletionTimestamp}}{{.metadata.name}} {{end}}{{end}}' 2>/dev/null | awk '{print $1}' || true
+}
+# The app's Running pod, waiting up to 2 minutes for one, for anything that execs into it. Without
+# the wait, an exec during a pod roll ran with no pod name ("error: pod, type/name or --filename
+# must be specified", in step b's CI log), and only a retry loop around it hid that.
+wait_pod() {
+  local p=""
+  for _ in $(seq 1 60); do
+    p=$(app_pod "$1")
+    [ -n "$p" ] && { echo "$p"; return 0; }
+    sleep 2
+  done
+  echo "FAIL: app $1 has no Running pod after 2 minutes" >&2
+  return 1
+}
+as_user_code() { # APP-ID PYTHON-CODE [ARGS...]: runs it in the app's streamlit container
+  local pod
+  pod=$(wait_pod "$1") || return 1
+  kubectl -n "$ns" exec "$pod" -c streamlit -- python -c "$2" "${@:3}"
 }

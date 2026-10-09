@@ -11,6 +11,11 @@ as the app's owner (ADR 0107; docs/design-data-access.md item 2):
 Control: before scanning it plants a decoy workload-shaped JWT in /tmp, and must find it. A scanner
 that finds nothing because it is broken fails the test instead of passing it.
 
+It also reports, under "s3_keys", every readable file holding AWS secret keys. With the lakehouse's s3
+sidecar in the pod that is expected and not a finding: ADR 0095's s3 mode writes the keys for user code
+to read, and ADR 0107 accepts that (the plan's item 8.3). Only the workload token and the bearer are
+claimed to be unreadable.
+
     python - <workload issuer> <sha256 of the app's bearer> < scanner.py
 Prints one JSON object.
 """
@@ -26,6 +31,8 @@ import sys
 ISSUER, BEARER_SHA = sys.argv[1], sys.argv[2]
 JWT = re.compile(rb"eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
 HEX64 = re.compile(rb"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
+# A key in AWS's shared-credentials form (the line, not the bare word that SDK libraries contain).
+S3_KEY = re.compile(rb"(?m)^aws_secret_access_key\s*=\s*\S{8,}")
 DECOY = "/tmp/booth-scanner-decoy"
 SKIP = ("/proc", "/sys", "/dev")
 
@@ -37,7 +44,7 @@ def b64(d):
 with open(DECOY, "w") as f:
     f.write(b64({"alg": "none"}) + "." + b64({"iss": ISSUER, "sub": "streamlit:decoy:scanner"}) + ".x")
 
-found = {"decoy": False, "workload_jwt": [], "bearer": [], "sa_token": False}
+found = {"decoy": False, "workload_jwt": [], "bearer": [], "sa_token": False, "s3_keys": []}
 counts = {"files": 0, "proc_entries": 0, "ports": []}
 
 
@@ -53,6 +60,8 @@ def inspect(data, where):
                 found["decoy"] = True
             else:
                 found["workload_jwt"].append(where)
+    if S3_KEY.search(data):
+        found["s3_keys"].append(where)
     for m in HEX64.findall(data):
         if hashlib.sha256(m).hexdigest() == BEARER_SHA:
             found["bearer"].append(where)

@@ -56,6 +56,9 @@ jobs:
       # data-access step b; CATALOG_REF is also what booth-api's realstack test pins.
       STORAGE_REF: 177076640f3c94e8620d6a2ee703d5404d840a84
       CATALOG_REF: c46f80f32dcc04206f4a4700de9fad47aaf75757
+      # The lakehouse checks (lakehouse-access.sh): booth-lakehouse's main at the time of data-access
+      # step c. Its chart pins Lakekeeper by digest; the MinIO fixture is pinned in realcore/minio.yaml.
+      LAKEHOUSE_REF: d7ed5338bb89bf00002546b0f3a5fdb07da681b5
     steps:
       - uses: actions/checkout@v4
 
@@ -83,13 +86,19 @@ jobs:
           ref: ${{ env.CATALOG_REF }}
           path: booth-catalog
 
+      - uses: actions/checkout@v4
+        with:
+          repository: projectbooth/booth-lakehouse
+          ref: ${{ env.LAKEHOUSE_REF }}
+          path: booth-lakehouse
+
       - uses: helm/kind-action@v1
         with:
           cluster_name: booth-streamlit-realcore
 
       - uses: azure/setup-helm@v4
 
-      - name: Build and load booth-core, booth-database, booth-storage, booth-catalog, booth-streamlit and app-runtime images
+      - name: Build and load booth-core, booth-database, booth-storage, booth-catalog, booth-lakehouse, booth-streamlit and app-runtime images
         run: |
           # dependency build (not update) installs exactly what core's Chart.lock pins.
           helm repo add nats https://nats-io.github.io/k8s/helm/charts/
@@ -98,14 +107,16 @@ jobs:
           docker build -t booth-database:ci booth-database
           docker build -t booth-storage:ci booth-storage
           docker build -t booth-catalog:ci booth-catalog
+          docker build -t booth-lakehouse:ci booth-lakehouse
           docker build -t booth-streamlit:ci .
           docker build -t booth-streamlit-app-runtime:ci -f images/app-runtime/Dockerfile .
-          kind load docker-image booth-core:ci booth-database:ci booth-storage:ci booth-catalog:ci booth-streamlit:ci booth-streamlit-app-runtime:ci --name booth-streamlit-realcore
+          kind load docker-image booth-core:ci booth-database:ci booth-storage:ci booth-catalog:ci booth-lakehouse:ci booth-streamlit:ci booth-streamlit-app-runtime:ci --name booth-streamlit-realcore
 
-      - name: Deploy Keycloak, booth-core, booth-database, booth-storage, booth-catalog and booth-streamlit (lifecycle and data-access test values)
+      - name: Deploy Keycloak, booth-core, booth-database, booth-storage, booth-catalog, booth-lakehouse, MinIO and booth-streamlit (lifecycle and data-access test values)
         run: >-
           test/integration/deploy-realcore.sh booth-core booth-core:ci booth-streamlit:ci booth-streamlit-app-runtime:ci
           booth-database booth-database:ci booth-storage booth-storage:ci booth-catalog booth-catalog:ci
+          booth-lakehouse booth-lakehouse:ci
 
       - name: Verify (including the REAL_CORE checks)
         env:
@@ -130,6 +141,9 @@ jobs:
       - name: "File read proxy (ADR 0107): storage and catalog files, refusals, other workspaces, stolen bearer, paused owner"
         run: test/integration/files-access.sh
 
+      - name: "Lakehouse (ADR 0107): Parquet through the s3 sidecar, read-only lease, scanner with the sidecar, pod roll on a refused renewal"
+        run: test/integration/lakehouse-access.sh
+
       - name: "Data access (ADR 0107): reads as owner, token unreadable, stolen bearer, viewer cap, lost owner, take ownership"
         run: test/integration/data-access.sh
 
@@ -152,4 +166,7 @@ jobs:
           kubectl -n booth-streamlit logs -l booth.projectbooth.io/component=app -c gate --tail=60 || true
           kubectl -n booth-database logs deploy/db-booth-database --tail=80 || true
           kubectl -n booth-streamlit logs -l booth.projectbooth.io/component=app -c pg-sidecar --tail=80 || true
+          kubectl -n booth-streamlit logs -l booth.projectbooth.io/component=app -c s3-sidecar --tail=80 || true
+          kubectl -n booth-lakehouse logs deploy/booth-lakehouse-api --tail=80 || true
+          kubectl -n booth-lakehouse logs deploy/booth-lakehouse-lakekeeper --tail=40 || true
           kubectl -n booth-system logs deploy/booth-core --tail=200 | grep -E "workload identity|credential" || true

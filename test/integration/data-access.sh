@@ -90,7 +90,7 @@ as_user_code "$A" 'import os; print(os.environ["DATABASE_URL"])' | grep -q "^pos
 step "2. the workload token and the bearer are unreadable by user code (scanner, with a decoy control)"
 bearer=$(kubectl -n "$ns" get secret "app-$A-gate" -o jsonpath='{.data.bearer}' | base64 -d)
 bearer_sha=$(printf '%s' "$bearer" | sha256sum | cut -d' ' -f1)
-scan=$(kubectl -n "$ns" exec -i "$(app_pod "$A")" -c streamlit -- python - "$issuer" "$bearer_sha" <"$here/fixtures/scanner.py")
+scan=$(kubectl -n "$ns" exec -i "$(wait_pod "$A")" -c streamlit -- python - "$issuer" "$bearer_sha" <"$here/fixtures/scanner.py")
 echo "$scan"
 [ "$(echo "$scan" | json 'd.found.decoy')" = true ] || fail "the scanner did not find its own decoy: the scan is broken, not clean"
 [ "$(echo "$scan" | json 'd.found.workload_jwt.length')" = 0 ] || fail "user code can read a workload token: $(echo "$scan" | json 'd.found.workload_jwt')"
@@ -117,7 +117,7 @@ print("forged-bearer", post("/internal/token", {"Authorization": "Bearer " + "0"
 fake = "e30." + base64.urlsafe_b64encode(json.dumps({"sub": "streamlit:%s:%s" % (ws, a)}).encode()).decode().rstrip("=") + ".x"
 rw = json.dumps({"kind": "postgres", "access": "readwrite", "scope": {"workspace": ws}}).encode()
 print("readwrite", *post("/internal/broker/api/credentials", {"Authorization": "Bearer " + fake, "X-Workspace": ws, "Content-Type": "application/json"}, rw))'
-out=$(kubectl -n "$ns" exec "$(app_pod "$A")" -c streamlit -- python -c "$STEAL" "$internal" "$bearer_b" "$A" "$B" acme-analytics)
+out=$(kubectl -n "$ns" exec "$(wait_pod "$A")" -c streamlit -- python -c "$STEAL" "$internal" "$bearer_b" "$A" "$B" acme-analytics)
 echo "$out"
 echo "$out" | grep -qx "stolen-bearer 200 is-app-b" || fail "B's bearer did not resolve to B (and only B)"
 echo "$out" | grep -qx "no-bearer 401" || fail "forged headers without a bearer"

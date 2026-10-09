@@ -112,6 +112,9 @@ apps:
 #     never need a route to booth-core;
 #   - with dataAccess.database.enabled, adds booth-core's credential sidecar (postgres mode, read
 #     only, the app's own workspace) to every app pod and gives the app DATABASE_URL.
+#   - with dataAccess.lakehouse.enabled, looks up the app's workspace warehouse in booth-lakehouse
+#     when the app starts and, if there is one, adds the credential sidecar in s3 mode (read only,
+#     the warehouse's prefix). Unlike the token, those S3 keys ARE readable by app code (ADR 0107).
 # An app can read what its owner, capped at viewer, can read in its workspace (ADR 0107 item 4).
 dataAccess:
   enabled: false
@@ -132,6 +135,19 @@ dataAccess:
       namespaceSelector: {kubernetes.io/metadata.name: booth-database}
       podSelector: {app.kubernetes.io/name: booth-database, app.kubernetes.io/component: postgres}
       port: 5432
+  # booth-lakehouse is installed: an app whose workspace has a warehouse gets the s3 sidecar and
+  # booth_streamlit.pyarrow_fs() / duckdb_secret(). The warehouse is looked up when the app starts
+  # (a warehouse created later reaches it at its next start). booth-lakehouse must trust booth-core's
+  # workload-token issuer, which it does by default (its workloadIdentity.enabled).
+  lakehouse:
+    enabled: false
+    # App code reads the warehouse's files from the object store directly. For one in the cluster
+    # (e.g. MinIO), set its selectors and port to add an egress rule; an external store (AWS S3) is
+    # reached through apps.egress.mode=open instead. Empty podSelector: no rule.
+    egress:
+      namespaceSelector: {}
+      podSelector: {}
+      port: 9000
   # The file read proxy (booth_streamlit.files): booth-storage objects and catalog file datasets,
   # read only, as the app's owner capped at viewer. booth-storage and booth-catalog must trust
   # booth-core's workload-token issuer (booth-storage oidc.workloadIssuerUrl, booth-catalog
@@ -146,14 +162,14 @@ dataAccess:
   refreshMax: ""
 
 # A ResourceQuota on this namespace, as a backstop below the running-app cap. The defaults fit
-# apps.maxRunning=5 with the default per-app limits (including the data-access sidecar), plus the
-# backend and room for one pod being replaced.
+# apps.maxRunning=5 with the default per-app limits (including both data-access sidecars), plus the
+# backend and room for one pod being replaced: 6 x 1.3 CPU + 0.5 = 8.3; 6 x 1.19Gi + 0.25Gi = 7.4Gi.
 quota:
   enabled: true
   hard:
     pods: "8"
-    limits.cpu: "7"
-    limits.memory: 7Gi
+    limits.cpu: "9"
+    limits.memory: 8Gi
     limits.ephemeral-storage: 4Gi
 
 podSecurityContext:

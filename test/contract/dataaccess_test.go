@@ -126,3 +126,31 @@ func TestChart_FileProxyLimits(t *testing.T) {
 		}
 	}
 }
+
+// The lakehouse (design-data-access item 3): off unless asked; on, the backend is told so, and an
+// in-cluster object store gets an egress rule only when its selectors are set, never an empty
+// namespace selector (which would match every namespace).
+func TestChart_Lakehouse(t *testing.T) {
+	envRe := regexp.MustCompile(`BOOTH_APP_LAKEHOUSE\s+value: "(\w+)"`)
+	if m := envRe.FindStringSubmatch(string(helmTemplate(t, "templates/deployment.yaml", dataOn...))); m == nil || m[1] != "false" {
+		t.Errorf("BOOTH_APP_LAKEHOUSE by default: %v", m)
+	}
+	lake := append(append([]string{}, dataOn...), "--set", "dataAccess.lakehouse.enabled=true")
+	if m := envRe.FindStringSubmatch(string(helmTemplate(t, "templates/deployment.yaml", lake...))); m == nil || m[1] != "true" {
+		t.Errorf("BOOTH_APP_LAKEHOUSE with it enabled: %v", m)
+	}
+	if pol := string(helmTemplate(t, "templates/networkpolicy.yaml", lake...)); strings.Contains(pol, "port: 9000") {
+		t.Error("object-store egress rendered without its selectors")
+	}
+	minio := append(append([]string{}, lake...),
+		"--set", "dataAccess.lakehouse.egress.podSelector.app=minio",
+		"--set", `dataAccess.lakehouse.egress.namespaceSelector.kubernetes\.io/metadata\.name=booth-minio`)
+	pol := string(helmTemplate(t, "templates/networkpolicy.yaml", minio...))
+	if !strings.Contains(pol, "kubernetes.io/metadata.name: booth-minio") || !strings.Contains(pol, "app: minio") || !strings.Contains(pol, "port: 9000") {
+		t.Errorf("no object-store egress with its selectors set:\n%s", pol)
+	}
+	args := append([]string{"template", "booth-streamlit", chartDir()}, lake...)
+	if out, err := helm(t, append(args, "--set", "dataAccess.lakehouse.egress.podSelector.app=minio")...); err == nil {
+		t.Errorf("a podSelector without a namespaceSelector rendered:\n%s", out)
+	}
+}
