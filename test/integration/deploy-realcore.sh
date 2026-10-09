@@ -153,7 +153,8 @@ helm upgrade --install booth-streamlit "$repo/charts/booth-streamlit" --namespac
   --set dataAccess.enabled=true --set dataAccess.database.enabled=true --set dataAccess.refreshMax=20s \
   --set dataAccess.lakehouse.enabled=true --set dataAccess.lakehouse.egress.podSelector.app=minio \
   --set 'dataAccess.lakehouse.egress.namespaceSelector.kubernetes\.io/metadata\.name=booth-minio' \
-  --set apps.pip.indexUrl=http://pypi.booth-pypi.svc:8080/simple --set apps.pip.timeout=60s \
+  --set apps.pip.indexUrl=http://pypi.booth-pypi.svc:8080/simple --set apps.pip.trustedHost=pypi.booth-pypi.svc \
+  --set apps.pip.timeout=60s \
   --set apps.pip.egress.podSelector.app=pypi \
   --set 'apps.pip.egress.namespaceSelector.kubernetes\.io/metadata\.name=booth-pypi'
 

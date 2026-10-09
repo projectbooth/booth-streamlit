@@ -107,6 +107,7 @@ type Lifecycle struct {
 	MaxPerWS      int
 	// Per-app packages (an app's requirements.txt), from the chart's apps.pip.
 	PipIndexURL      string
+	PipTrustedHost   string
 	PipTimeout       time.Duration
 	PipSiteSizeLimit string
 	// PipEgressClosed: apps.egress.mode is closed and no package-index egress is configured.
@@ -136,6 +137,7 @@ func Load() (Config, error) {
 			TmpSizeLimit:   getEnv("BOOTH_APP_TMP_SIZE_LIMIT", "256Mi"),
 
 			PipIndexURL:      os.Getenv("BOOTH_APP_PIP_INDEX_URL"),
+			PipTrustedHost:   os.Getenv("BOOTH_APP_PIP_TRUSTED_HOST"),
 			PipSiteSizeLimit: getEnv("BOOTH_APP_PIP_SITE_SIZE_LIMIT", "1Gi"),
 			PipEgressClosed:  os.Getenv("BOOTH_APP_PIP_EGRESS_CLOSED") == "true",
 		},

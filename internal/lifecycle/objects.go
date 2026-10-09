@@ -277,6 +277,9 @@ func addPip(cfg Config, spec *corev1.PodSpec, sc corev1.SecurityContext) {
 	if pip.IndexURL != "" {
 		env = append(env, corev1.EnvVar{Name: "PIP_INDEX_URL", Value: pip.IndexURL})
 	}
+	if pip.TrustedHost != "" {
+		env = append(env, corev1.EnvVar{Name: "PIP_TRUSTED_HOST", Value: pip.TrustedHost})
+	}
 	uid := appUID
 	pipSC := sc
 	pipSC.RunAsUser, pipSC.RunAsGroup = &uid, &uid

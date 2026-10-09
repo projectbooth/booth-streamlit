@@ -59,6 +59,9 @@ type Config struct {
 type PipConfig struct {
 	// IndexURL is the package index (PIP_INDEX_URL); empty is pip's default, PyPI.
 	IndexURL string
+	// TrustedHost (PIP_TRUSTED_HOST) lets pip use an index served over plain HTTP, which it
+	// otherwise ignores. Explicit, because it gives up transport integrity for that host.
+	TrustedHost string
 	// Deadline stops the whole install: a pip that hangs fails the app instead of leaving it
 	// starting forever.
 	Deadline time.Duration
