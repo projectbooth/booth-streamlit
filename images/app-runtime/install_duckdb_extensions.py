@@ -46,7 +46,9 @@ def main(target: str) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         for name, want in PINNED[plat].items():
             url = f"https://extensions.duckdb.org/{VERSION}/{plat}/{name}.duckdb_extension.gz"
-            with urllib.request.urlopen(url, timeout=120) as resp:  # noqa: S310 - fixed https URL
+            # extensions.duckdb.org answers Python's default User-Agent with 403 (CI run 37976978455).
+            req = urllib.request.Request(url, headers={"User-Agent": "booth-streamlit-image-build (+https://github.com/projectbooth/booth-streamlit)"})
+            with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310 - fixed https URL
                 data = resp.read()
             got = hashlib.sha256(data).hexdigest()
             if got != want:
