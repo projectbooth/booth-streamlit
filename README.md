@@ -25,8 +25,9 @@ app), "Data access paused" and Take ownership; **(b)** the file read proxy for b
 and catalog file datasets (`booth_streamlit.files`); **(c)** the lakehouse: an s3 credential sidecar
 scoped to the workspace's warehouse, with `booth_streamlit.pyarrow_fs()` and `duckdb_secret()`
 (`dataAccess.lakehouse.enabled`; the S3 keys it writes are readable by app code, as ADR 0107 accepts).
-Off unless `dataAccess.enabled`. Not built yet: (d) per-app `pip install`, (e) `dashboard.*`
-publishing. Design: `docs/design-v0.md`, including its
+Off unless `dataAccess.enabled`. **(d)** per-app packages: an optional `requirements.txt`, installed on
+every start by an init container that holds no token, bearer or credentials (`apps.pip`); DuckDB
+is in the runtime image. Not built yet: (e) `dashboard.*` publishing. Design: `docs/design-v0.md`, including its
 "as built" notes.
 
 **Who may do what (ADR 0105, interim while ARCHITECTURE.md item 55 is open):** only owners of the

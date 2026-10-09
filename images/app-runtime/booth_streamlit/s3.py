@@ -140,15 +140,27 @@ def _sql_str(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _load_extensions(con) -> None:
+    """httpfs and aws: the image's own copies when there are some (BOOTH_DUCKDB_EXTENSIONS, no
+    download), else DuckDB's usual INSTALL, which downloads them and needs internet egress."""
+    ext = os.environ.get("BOOTH_DUCKDB_EXTENSIONS", "")
+    if ext and os.path.isdir(ext):
+        con.execute(f"SET extension_directory = {_sql_str(ext)}")
+        con.execute("LOAD httpfs; LOAD aws;")
+    else:
+        con.execute("INSTALL httpfs; LOAD httpfs; INSTALL aws; LOAD aws;")
+
+
 def duckdb_secret(con, name: str = "booth_s3") -> None:
-    """Create (or replace) a DuckDB S3 secret on ``con`` for the warehouse's object store. Loads
-    ``httpfs`` and ``aws`` (DuckDB downloads them on first use, so this needs internet egress). The
-    secret uses DuckDB's AWS credential chain with ``REFRESH auto``, so renewed keys are picked up;
-    only the location is set here, and no key ever appears in SQL text."""
+    """Create (or replace) a DuckDB S3 secret on ``con`` for the warehouse's object store, after
+    loading ``httpfs`` and ``aws`` (the image's copies; this sets the connection's
+    extension_directory to them). The secret uses DuckDB's AWS credential chain with ``REFRESH
+    auto``, so renewed keys are picked up; only the location is set here, and no key ever appears
+    in SQL text."""
     if not name.replace("_", "").isalnum():
         raise ValueError("secret name must be letters, digits and underscores")
     loc = location()
-    con.execute("INSTALL httpfs; LOAD httpfs; INSTALL aws; LOAD aws;")
+    _load_extensions(con)
     parts = ["TYPE s3", "PROVIDER credential_chain", "REFRESH auto"]
     if loc.region:
         parts.append(f"REGION {_sql_str(loc.region)}")

@@ -174,6 +174,9 @@ func newLifecycle(ctx context.Context, l config.Lifecycle, d config.Data, svc *a
 	if _, err := resource.ParseQuantity(l.TmpSizeLimit); err != nil {
 		return nil, fmt.Errorf("BOOTH_APP_TMP_SIZE_LIMIT: %w", err)
 	}
+	if _, err := resource.ParseQuantity(l.PipSiteSizeLimit); err != nil {
+		return nil, fmt.Errorf("BOOTH_APP_PIP_SITE_SIZE_LIMIT: %w", err)
+	}
 	var data *lifecycle.DataConfig
 	if d.Enabled {
 		var sideRes corev1.ResourceRequirements
@@ -210,5 +213,6 @@ func newLifecycle(ctx context.Context, l config.Lifecycle, d config.Data, svc *a
 		PullPolicy: corev1.PullPolicy(l.PullPolicy), ServiceAccount: l.ServiceAccount,
 		AppResources: appRes, GateResources: gateRes, TmpSizeLimit: l.TmpSizeLimit,
 		IdleTimeout: l.IdleTimeout, Owner: self,
+		Pip: lifecycle.PipConfig{IndexURL: l.PipIndexURL, Deadline: l.PipTimeout, SiteSizeLimit: l.PipSiteSizeLimit, EgressClosed: l.PipEgressClosed},
 	}, client, svc), nil
 }

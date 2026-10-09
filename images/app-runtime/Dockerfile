@@ -3,8 +3,9 @@
 # one user's app (design note (a)); the module backend never runs Streamlit itself.
 #
 # Streamlit binds 127.0.0.1 in the pod (STREAMLIT_SERVER_ADDRESS, set by the lifecycle); the gate
-# container, which runs from the backend's image, is the pod's only way in. The data libraries and
-# per-app pip installs (ADR 0104) arrive with data access.
+# container, which runs from the backend's image, is the pod's only way in. Per-app packages (an
+# app's requirements.txt) are installed by an init container from this same image
+# (booth_streamlit.pip_install) into a volume on PYTHONPATH.
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -26,6 +27,13 @@ RUN groupadd --gid 65532 booth && useradd --uid 65532 --gid 65532 --no-create-ho
 
 COPY images/app-runtime/requirements.txt /opt/booth/requirements.txt
 RUN pip install -r /opt/booth/requirements.txt
+# DuckDB's httpfs and aws extensions, matching the pinned DuckDB, into a directory that is part of
+# the image (HOME is /tmp at runtime, an empty volume). booth_streamlit.duckdb_secret() loads them
+# from here, so reading the lakehouse needs no download at runtime. They come from DuckDB's
+# extension repository at build time.
+ENV BOOTH_DUCKDB_EXTENSIONS=/opt/booth/duckdb
+RUN python -c "import duckdb; c = duckdb.connect(); c.execute(\"SET extension_directory = '/opt/booth/duckdb'\"); c.execute('INSTALL httpfs; INSTALL aws; LOAD httpfs; LOAD aws')" \
+ && chmod -R a+rX /opt/booth/duckdb
 COPY images/app-runtime/booth_streamlit /opt/booth/lib/booth_streamlit
 ENV PYTHONPATH=/opt/booth/lib
 

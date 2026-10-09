@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +51,22 @@ type Config struct {
 	Owner *appsv1.Deployment
 	// Data, if set, gives app pods data access (ADR 0104/0107); nil runs apps without any.
 	Data *DataConfig
+	// Pip installs an app's requirements.txt (docs/design-data-access.md item 5).
+	Pip PipConfig
+}
+
+// PipConfig is how apps' packages are installed.
+type PipConfig struct {
+	// IndexURL is the package index (PIP_INDEX_URL); empty is pip's default, PyPI.
+	IndexURL string
+	// Deadline stops the whole install: a pip that hangs fails the app instead of leaving it
+	// starting forever.
+	Deadline time.Duration
+	// SiteSizeLimit bounds the installed packages (an emptyDir size limit, e.g. "1Gi").
+	SiteSizeLimit string
+	// EgressClosed: apps.egress.mode is closed and no package-index egress is configured, so a
+	// failed install that couldn't connect is explained as such.
+	EgressClosed bool
 }
 
 // DataConfig is the per-app data-access wiring (docs/design-data-access.md).
@@ -79,8 +97,10 @@ const (
 	StateStopped   State = "stopped"   // owner stopped it
 	StateSuspended State = "suspended" // idle shutdown; opening it wakes it
 	StateStarting  State = "starting"
-	StateRunning   State = "running"
-	StateFailed    State = "failed"
+	// StateInstalling: the pod's pip init container is installing the app's requirements.txt.
+	StateInstalling State = "installing"
+	StateRunning    State = "running"
+	StateFailed     State = "failed"
 )
 
 // Status is an app's observed state plus, when failed, why.
@@ -115,6 +135,12 @@ type activity struct {
 func New(cfg Config, client kubernetes.Interface, svc *apps.Service) *Controller {
 	if cfg.Interval == 0 {
 		cfg.Interval = 5 * time.Second
+	}
+	if cfg.Pip.SiteSizeLimit == "" {
+		cfg.Pip.SiteSizeLimit = "1Gi"
+	}
+	if cfg.Pip.Deadline <= 0 {
+		cfg.Pip.Deadline = 5 * time.Minute
 	}
 	return &Controller{
 		cfg: cfg, client: client, apps: svc, now: time.Now,
@@ -393,7 +419,7 @@ func (c *Controller) ensureConfigMap(ctx context.Context, want *corev1.ConfigMap
 	if err != nil {
 		return wrap("configmap", err)
 	}
-	if cur.Data[sourceKey] == want.Data[sourceKey] && len(cur.OwnerReferences) == 1 && cur.OwnerReferences[0].UID == want.OwnerReferences[0].UID {
+	if maps.Equal(cur.Data, want.Data) && len(cur.OwnerReferences) == 1 && cur.OwnerReferences[0].UID == want.OwnerReferences[0].UID {
 		return nil
 	}
 	upd := cur.DeepCopy()
@@ -482,7 +508,47 @@ func observe(a apps.App, d *appsv1.Deployment, pods []corev1.Pod) Status {
 	if d != nil && d.Status.ReadyReplicas >= 1 && d.Status.ObservedGeneration >= d.Generation && d.Status.UpdatedReplicas >= 1 {
 		return Status{State: StateRunning}
 	}
+	if st, ok := observePip(d, pods); ok {
+		return st
+	}
 	return Status{State: StateStarting}
+}
+
+// observePip reports the pip init container of the current pod: installing while it runs, failed
+// (with its termination message, the tail of pip's output) once an attempt has failed. The kubelet
+// retries a failed install with back-off, and the app keeps showing as failed meanwhile, so an app
+// whose install can't succeed never sits in "starting".
+func observePip(d *appsv1.Deployment, pods []corev1.Pod) (Status, bool) {
+	for _, p := range pods {
+		if p.DeletionTimestamp != nil || (d != nil && p.Annotations[annoSourceHash] != d.Spec.Template.Annotations[annoSourceHash]) {
+			continue // a pod on its way out, or one built from an older source
+		}
+		for _, cs := range p.Status.InitContainerStatuses {
+			if cs.Name != "pip" {
+				continue
+			}
+			for _, t := range []*corev1.ContainerStateTerminated{cs.State.Terminated, cs.LastTerminationState.Terminated} {
+				if t != nil && t.ExitCode != 0 {
+					return Status{State: StateFailed, Reason: pipFailure(t)}, true
+				}
+			}
+			if cs.State.Terminated == nil {
+				return Status{State: StateInstalling}, true
+			}
+		}
+	}
+	return Status{}, false
+}
+
+func pipFailure(t *corev1.ContainerStateTerminated) string {
+	switch {
+	case strings.TrimSpace(t.Message) != "":
+		return strings.TrimSpace(t.Message)
+	case t.Reason == "OOMKilled":
+		return "pip install ran out of memory (the app's memory limit)"
+	default:
+		return fmt.Sprintf("pip install failed (exit %d, %s)", t.ExitCode, t.Reason)
+	}
 }
 
 // ownerRef points at d. BlockOwnerDeletion is false on purpose: setting it true requires update on

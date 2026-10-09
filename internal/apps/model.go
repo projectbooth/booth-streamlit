@@ -27,11 +27,13 @@ const (
 
 // App is one Streamlit app.
 type App struct {
-	ID           string       `json:"id"`
-	Workspace    string       `json:"workspace"`
-	Name         string       `json:"name"`
-	Description  string       `json:"description"`
-	Source       string       `json:"source,omitempty"` // omitted in lists
+	ID          string `json:"id"`
+	Workspace   string `json:"workspace"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Source      string `json:"source,omitempty"` // omitted in lists
+	// Requirements is the app's optional requirements.txt, installed into its pod on every start.
+	Requirements string       `json:"requirements,omitempty"` // omitted in lists
 	Shared       bool         `json:"shared"`
 	DesiredState DesiredState `json:"desiredState"`
 	// Suspended: idle shutdown stopped the container; DesiredState is still Running and any
@@ -59,7 +61,9 @@ type Input struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Source      string `json:"source"`
-	Shared      bool   `json:"shared"`
+	// Requirements: an optional requirements.txt (package specifiers only; no pip options).
+	Requirements string `json:"requirements"`
+	Shared       bool   `json:"shared"`
 }
 
 // Limits on Input. Source is bounded well under a Kubernetes ConfigMap's ~1 MiB, which is how the
@@ -68,6 +72,7 @@ const (
 	MaxNameLen            = 100
 	MaxDescriptionLen     = 2000
 	DefaultMaxSourceBytes = 256 * 1024
+	MaxRequirementsBytes  = 16 * 1024
 	maxSourceBytesCeiling = 900 * 1024
 )
 

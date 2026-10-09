@@ -99,6 +99,23 @@ describe("status", () => {
     expect(screen.queryByText(/CrashLoopBackOff/)).toBeNull();
   });
 
+  it("shows installing packages, and a failed install's pip output to owners", async () => {
+    const installing = { ...shared, desiredState: "running" as const, status: { state: "installing" as const } };
+    const pipFailed = {
+      ...shared,
+      id: "bbbb",
+      name: "Ops",
+      desiredState: "running" as const,
+      status: { state: "failed" as const, reason: "pip install failed (exit 1):\nERROR: No matching distribution found for nope==9" },
+    };
+    backend("owner", [installing, pipFailed]);
+    render(<App />);
+    expect(await screen.findByText("Installing packages")).toBeInTheDocument();
+    const failure = within(screen.getByText("Ops").closest("li")!).getByText(/No matching distribution found for nope==9/);
+    expect(failure).toHaveTextContent("Failed to start: pip install failed (exit 1):");
+    expect(failure.className).toContain("whitespace-pre-wrap");
+  });
+
   it("shows the backend's reason when Start is refused at the cap", async () => {
     backend("owner", [shared], {
       "POST api/apps/aaaa/start": () => new Response(JSON.stringify({ error: "too many apps are running; stop one first" }), { status: 409 }),
@@ -119,10 +136,11 @@ describe("editor", () => {
     expect(screen.getByRole("note")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Name"), "Revenue");
     await userEvent.click(screen.getByLabelText(/Shared with workspace members/));
+    await userEvent.type(screen.getByLabelText(/requirements.txt/), "humanize==4.12.0");
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Streamlit apps" })).toBeInTheDocument());
     const post = calls.find((c) => c.method === "POST" && c.url === "api/apps")!;
-    expect(post.body).toMatchObject({ name: "Revenue", shared: true });
+    expect(post.body).toMatchObject({ name: "Revenue", shared: true, requirements: "humanize==4.12.0" });
     expect((post.body as { source: string }).source).toContain("booth_streamlit.user()");
   });
 

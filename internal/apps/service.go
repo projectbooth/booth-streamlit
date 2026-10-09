@@ -94,7 +94,7 @@ func (s *Service) Create(ctx context.Context, c identity.Caller, in Input) (App,
 	now := s.now().UTC()
 	a := App{
 		ID: newID(), Workspace: c.Workspace, GateBearer: newBearer(), Owner: c.Subject,
-		Name: in.Name, Description: in.Description, Source: in.Source, Shared: in.Shared,
+		Name: in.Name, Description: in.Description, Source: in.Source, Requirements: in.Requirements, Shared: in.Shared,
 		DesiredState: Stopped, CreatedBy: c.Subject, CreatedAt: now, UpdatedBy: c.Subject, UpdatedAt: now,
 	}
 	if err := s.store.Create(ctx, a); err != nil {
@@ -114,7 +114,7 @@ func (s *Service) Update(ctx context.Context, c identity.Caller, id string, in I
 	if err != nil {
 		return App{}, err
 	}
-	cur.Name, cur.Description, cur.Source, cur.Shared = in.Name, in.Description, in.Source, in.Shared
+	cur.Name, cur.Description, cur.Source, cur.Requirements, cur.Shared = in.Name, in.Description, in.Source, in.Requirements, in.Shared
 	cur.UpdatedBy, cur.UpdatedAt = c.Subject, s.now().UTC()
 	if err := s.store.Update(ctx, cur); err != nil {
 		return App{}, err
@@ -262,7 +262,29 @@ func (s *Service) validate(in Input) (Input, error) {
 	case !utf8.ValidString(in.Source) || strings.ContainsRune(in.Source, 0):
 		return Input{}, fmt.Errorf("%w: source must be UTF-8 text", ErrInvalid)
 	}
+	if err := validateRequirements(in.Requirements); err != nil {
+		return Input{}, err
+	}
 	return in, nil
+}
+
+// validateRequirements bounds an app's requirements.txt. Package specifiers only: a line starting
+// with "-" is a pip option (an index URL, another requirements file, an editable install), and the
+// package index is the operator's choice (the chart's apps.pip.indexUrl), not the app's. pip
+// itself reports anything else it can't parse, and the owner sees that as the install failure.
+func validateRequirements(r string) error {
+	switch {
+	case len(r) > MaxRequirementsBytes:
+		return fmt.Errorf("%w: requirements.txt is larger than %d bytes", ErrInvalid, MaxRequirementsBytes)
+	case !utf8.ValidString(r) || strings.ContainsRune(r, 0):
+		return fmt.Errorf("%w: requirements.txt must be UTF-8 text", ErrInvalid)
+	}
+	for i, line := range strings.Split(r, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "-") {
+			return fmt.Errorf("%w: requirements.txt line %d is a pip option; only package specifiers are allowed (the package index is set by the operator)", ErrInvalid, i+1)
+		}
+	}
+	return nil
 }
 
 // newBearer returns 256 random bits, hex-encoded.

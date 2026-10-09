@@ -82,7 +82,8 @@ class FakeDuck:
         self.sql.append(q)
 
 
-def test_duckdb_secret_sets_the_location_only(files):
+def test_duckdb_secret_sets_the_location_only(files, monkeypatch):
+    monkeypatch.delenv("BOOTH_DUCKDB_EXTENSIONS", raising=False)  # no image copy: DuckDB's own INSTALL
     con = FakeDuck()
     bs.duckdb_secret(con)
     assert con.sql[0] == "INSTALL httpfs; LOAD httpfs; INSTALL aws; LOAD aws;"
@@ -93,3 +94,29 @@ def test_duckdb_secret_sets_the_location_only(files):
     assert "SK" not in " ".join(con.sql) and "AK" not in " ".join(con.sql)
     with pytest.raises(ValueError):
         bs.duckdb_secret(con, name="x; DROP")
+
+
+def test_duckdb_secret_loads_the_images_extensions(files, tmp_path, monkeypatch):
+    monkeypatch.setenv("BOOTH_DUCKDB_EXTENSIONS", str(tmp_path))
+    con = FakeDuck()
+    bs.duckdb_secret(con)
+    assert con.sql[:2] == [f"SET extension_directory = '{tmp_path}'", "LOAD httpfs; LOAD aws;"]
+
+
+def test_duckdb_secret_with_real_duckdb(files):
+    """Real DuckDB, as the runtime image ships it (its extensions preinstalled, no download): the
+    secret exists with the warehouse's endpoint and path style, and no key in it."""
+    duckdb = pytest.importorskip("duckdb")
+    import os
+
+    if not os.path.isdir(os.environ.get("BOOTH_DUCKDB_EXTENSIONS", "")):
+        pytest.skip("not in the runtime image (no preinstalled DuckDB extensions)")
+    con = duckdb.connect()
+    bs.duckdb_secret(con)
+    name, typ, provider, secret = con.execute(
+        "SELECT name, type, provider, secret_string FROM duckdb_secrets() WHERE name = 'booth_s3'"
+    ).fetchone()
+    assert (name, typ, provider) == ("booth_s3", "s3", "credential_chain")
+    assert "endpoint=minio.booth-minio.svc:9000" in secret and "url_style=path" in secret and "use_ssl=false" in secret
+    # DuckDB 1.5.6 shows the key id and redacts the secret; the keys came from the file, not from us.
+    assert "secret=redacted" in secret.split(";") and "SK" not in secret

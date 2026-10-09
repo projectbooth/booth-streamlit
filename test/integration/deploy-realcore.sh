@@ -82,6 +82,12 @@ helm upgrade --install db "$database_dir/charts/booth-database" -n booth-databas
 echo "--- MinIO (the lakehouse's object store; a test fixture)"
 kubectl apply -f "$here/minio.yaml" >/dev/null
 
+echo "--- the test package index (fixtures/pypi_index.py, from the runtime image; for pip-access.sh)"
+kubectl create namespace booth-pypi --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n booth-pypi create configmap pypi-index --from-file=pypi_index.py="$repo/test/integration/fixtures/pypi_index.py" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+sed "s|__RUNTIME_IMAGE__|$runtime_image|" "$here/pypi.yaml" | kubectl apply -f - >/dev/null
+
 echo "--- booth-storage from $storage_dir ($(git -C "$storage_dir" rev-parse --short HEAD 2>/dev/null || echo '?')): a filesystem root per workspace, and its s3 credential provider"
 kubectl create namespace booth-storage --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 helm upgrade --install booth-storage "$storage_dir/charts/booth-storage" -n booth-storage \
@@ -146,8 +152,12 @@ helm upgrade --install booth-streamlit "$repo/charts/booth-streamlit" --namespac
   --set apps.maxRunning=1 --set apps.idleTimeout=60s \
   --set dataAccess.enabled=true --set dataAccess.database.enabled=true --set dataAccess.refreshMax=20s \
   --set dataAccess.lakehouse.enabled=true --set dataAccess.lakehouse.egress.podSelector.app=minio \
-  --set 'dataAccess.lakehouse.egress.namespaceSelector.kubernetes\.io/metadata\.name=booth-minio'
+  --set 'dataAccess.lakehouse.egress.namespaceSelector.kubernetes\.io/metadata\.name=booth-minio' \
+  --set apps.pip.indexUrl=http://pypi.booth-pypi.svc:8080/simple --set apps.pip.timeout=60s \
+  --set apps.pip.egress.podSelector.app=pypi \
+  --set 'apps.pip.egress.namespaceSelector.kubernetes\.io/metadata\.name=booth-pypi'
 
 kubectl -n keycloak rollout status deploy/keycloak --timeout=600s
 kubectl -n booth-lakehouse rollout status deploy/booth-lakehouse-lakekeeper --timeout=600s
 kubectl -n booth-lakehouse rollout status deploy/booth-lakehouse-api --timeout=600s
+kubectl -n booth-pypi rollout status deploy/pypi --timeout=300s

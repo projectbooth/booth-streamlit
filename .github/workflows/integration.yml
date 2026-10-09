@@ -112,7 +112,7 @@ jobs:
           docker build -t booth-streamlit-app-runtime:ci -f images/app-runtime/Dockerfile .
           kind load docker-image booth-core:ci booth-database:ci booth-storage:ci booth-catalog:ci booth-lakehouse:ci booth-streamlit:ci booth-streamlit-app-runtime:ci --name booth-streamlit-realcore
 
-      - name: Deploy Keycloak, booth-core, booth-database, booth-storage, booth-catalog, booth-lakehouse, MinIO and booth-streamlit (lifecycle and data-access test values)
+      - name: Deploy Keycloak, booth-core, booth-database, booth-storage, booth-catalog, booth-lakehouse, MinIO, the test package index and booth-streamlit (lifecycle and data-access test values)
         run: >-
           test/integration/deploy-realcore.sh booth-core booth-core:ci booth-streamlit:ci booth-streamlit-app-runtime:ci
           booth-database booth-database:ci booth-storage booth-storage:ci booth-catalog booth-catalog:ci
@@ -147,6 +147,9 @@ jobs:
       - name: "Data access (ADR 0107): reads as owner, token unreadable, stolen bearer, viewer cap, lost owner, take ownership"
         run: test/integration/data-access.sh
 
+      - name: "Per-app packages (ADR 0107): install from the in-cluster test index, timings, mounts, scanner, bad requirement, hung install, closed egress"
+        run: test/integration/pip-access.sh
+
       - name: Dump state on failure
         if: failure()
         run: |
@@ -169,4 +172,6 @@ jobs:
           kubectl -n booth-streamlit logs -l booth.projectbooth.io/component=app -c s3-sidecar --tail=80 || true
           kubectl -n booth-lakehouse logs deploy/booth-lakehouse-api --tail=80 || true
           kubectl -n booth-lakehouse logs deploy/booth-lakehouse-lakekeeper --tail=40 || true
+          kubectl -n booth-streamlit logs -l booth.projectbooth.io/component=app -c pip --tail=60 || true
+          kubectl -n booth-pypi logs deploy/pypi --tail=40 || true
           kubectl -n booth-system logs deploy/booth-core --tail=200 | grep -E "workload identity|credential" || true

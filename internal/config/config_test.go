@@ -15,6 +15,7 @@ var allVars = []string{
 	"BOOTH_DATA_ACCESS", "BOOTH_WORKLOAD_MINT_URL", "BOOTH_WORKLOAD_MINT_CREDENTIAL", "BOOTH_CORE_URL", "BOOTH_INTERNAL_ADDR",
 	"BOOTH_INTERNAL_URL", "BOOTH_APP_SIDECAR_IMAGE", "BOOTH_APP_SIDECAR_RESOURCES", "BOOTH_APP_DATABASE", "BOOTH_DATA_REFRESH_MAX",
 	"BOOTH_FILES_MAX_OBJECT_BYTES", "BOOTH_FILES_OBJECT_TIMEOUT", "BOOTH_FILES_META_TIMEOUT", "BOOTH_FILES_MAX_CONCURRENT",
+	"BOOTH_APP_LAKEHOUSE", "BOOTH_APP_PIP_INDEX_URL", "BOOTH_APP_PIP_TIMEOUT", "BOOTH_APP_PIP_SITE_SIZE_LIMIT", "BOOTH_APP_PIP_EGRESS_CLOSED",
 }
 
 // minimal is the smallest valid environment.
@@ -102,6 +103,10 @@ func TestLoad_ReadsEverything(t *testing.T) {
 		"BOOTH_APP_MAX_WEBSOCKET":             "1h",
 		"BOOTH_APP_MAX_RUNNING":               "5",
 		"BOOTH_APP_MAX_RUNNING_PER_WORKSPACE": "2",
+		"BOOTH_APP_PIP_INDEX_URL":             "http://pypi.test/simple",
+		"BOOTH_APP_PIP_TIMEOUT":               "90s",
+		"BOOTH_APP_PIP_SITE_SIZE_LIMIT":       "512Mi",
+		"BOOTH_APP_PIP_EGRESS_CLOSED":         "true",
 	}))
 	cfg, err := Load()
 	if err != nil {
@@ -114,6 +119,7 @@ func TestLoad_ReadsEverything(t *testing.T) {
 		Namespace: "booth-streamlit", SelfDeployment: "booth-streamlit", RuntimeImage: "runtime:1", GateImage: "backend:1",
 		PullPolicy: "Never", ServiceAccount: "booth-streamlit-app", AppResources: `{"limits":{"cpu":"1"}}`, GateResources: `{"limits":{"cpu":"100m"}}`,
 		TmpSizeLimit: "64Mi", IdleTimeout: 90 * time.Second, MaxWebsocket: time.Hour, MaxRunning: 5, MaxPerWS: 2,
+		PipIndexURL: "http://pypi.test/simple", PipTimeout: 90 * time.Second, PipSiteSizeLimit: "512Mi", PipEgressClosed: true,
 	}
 	if cfg.Lifecycle != want {
 		t.Errorf("lifecycle = %+v\nwant %+v", cfg.Lifecycle, want)
@@ -122,6 +128,7 @@ func TestLoad_ReadsEverything(t *testing.T) {
 
 func TestLoad_InvalidValues(t *testing.T) {
 	for name, bad := range map[string][]string{
+		"BOOTH_APP_PIP_TIMEOUT":               {"0s", "-1m", "soon"},
 		"BOOTH_STREAMLIT_MAX_SOURCE_BYTES":    {"0", "-1", "lots"},
 		"BOOTH_APP_IDLE_TIMEOUT":              {"soon", "-5m"},
 		"BOOTH_APP_MAX_WEBSOCKET":             {"forever"},

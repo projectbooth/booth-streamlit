@@ -11,7 +11,7 @@ st.title("Hello")
 st.write(f"Viewing as {viewer.subject if viewer else 'unknown'}")
 `;
 
-const empty: AppInput = { name: "", description: "", source: STARTER, shared: false };
+const empty: AppInput = { name: "", description: "", source: STARTER, requirements: "", shared: false };
 
 /** Create (no id) or edit an app. Owners only; the backend refuses anyone else. */
 export function AppEditor({ id, onDone }: { id?: string; onDone: () => void }) {
@@ -19,7 +19,9 @@ export function AppEditor({ id, onDone }: { id?: string; onDone: () => void }) {
   if (loaded.status === "loading") return <p className="text-sm">Loading…</p>;
   if (loaded.status === "error") return <ErrorText error={loaded.error} />;
   const a = loaded.data;
-  const initial = a ? { name: a.name, description: a.description, source: a.source ?? "", shared: a.shared } : empty;
+  const initial = a
+    ? { name: a.name, description: a.description, source: a.source ?? "", requirements: a.requirements ?? "", shared: a.shared }
+    : empty;
   return <Form id={id} initial={initial} onDone={onDone} />;
 }
 
@@ -66,6 +68,20 @@ function Form({ id, initial, onDone }: { id?: string; initial: AppInput; onDone:
       <label className="block space-y-1 text-sm">
         <span>Python source</span>
         <textarea className={`${field} h-80 font-mono`} spellCheck={false} value={form.source} onChange={(e) => set("source", e.target.value)} />
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>requirements.txt (optional)</span>
+        <textarea
+          className={`${field} h-24 font-mono`}
+          spellCheck={false}
+          maxLength={16384}
+          placeholder="humanize==4.12.0"
+          value={form.requirements}
+          onChange={(e) => set("requirements", e.target.value)}
+        />
+        <span className="block text-xs text-gray-600 dark:text-gray-400">
+          One package per line, no pip options. Installed every time the app starts, which makes starting slower.
+        </span>
       </label>
       {error && <ErrorText error={error} />}
       <div className="flex items-center gap-2 text-sm">

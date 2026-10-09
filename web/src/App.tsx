@@ -76,6 +76,7 @@ const STATE_LABELS: Record<BoothApp["status"]["state"], string> = {
   stopped: "Stopped",
   suspended: "Sleeping",
   starting: "Starting",
+  installing: "Installing packages",
   running: "Running",
   failed: "Failed",
 };
@@ -114,7 +115,8 @@ function AppRow({ app, me, onEdit, act }: { app: BoothApp; me: Me; onEdit: () =>
           </p>
         )}
         {canAuthor && app.status?.state === "failed" && app.status.reason && (
-          <p className="text-sm text-red-700 dark:text-red-400">Failed to start: {app.status.reason}</p>
+          // A pip failure is several lines of pip's output: keep its line breaks.
+          <p className="whitespace-pre-wrap text-sm text-red-700 dark:text-red-400">Failed to start: {app.status.reason}</p>
         )}
       </div>
       <div className="flex shrink-0 gap-2 text-sm">

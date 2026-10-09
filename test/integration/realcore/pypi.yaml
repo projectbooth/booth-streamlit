@@ -1,0 +1,41 @@
+# The in-cluster package index for the pip checks (pip-access.sh): fixtures/pypi_index.py, run from
+# the app runtime image already loaded into the cluster, so CI never depends on public PyPI. The
+# Python script arrives as the ConfigMap pypi-index (deploy-realcore.sh creates it). __RUNTIME_IMAGE__
+# is replaced at deploy time.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: booth-pypi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pypi
+  namespace: booth-pypi
+spec:
+  selector: {matchLabels: {app: pypi}}
+  template:
+    metadata: {labels: {app: pypi}}
+    spec:
+      containers:
+        - name: index
+          image: __RUNTIME_IMAGE__
+          imagePullPolicy: Never
+          command: ["python", "/srv/pypi_index.py", "8080"]
+          ports: [{containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /simple/, port: 8080}
+            periodSeconds: 2
+          volumeMounts: [{name: script, mountPath: /srv, readOnly: true}]
+      volumes:
+        - name: script
+          configMap: {name: pypi-index}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pypi
+  namespace: booth-pypi
+spec:
+  selector: {app: pypi}
+  ports: [{port: 8080}]
