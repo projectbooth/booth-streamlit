@@ -14,6 +14,7 @@ var allVars = []string{
 	"BOOTH_APP_IDLE_TIMEOUT", "BOOTH_APP_MAX_WEBSOCKET", "BOOTH_APP_MAX_RUNNING", "BOOTH_APP_MAX_RUNNING_PER_WORKSPACE",
 	"BOOTH_DATA_ACCESS", "BOOTH_WORKLOAD_MINT_URL", "BOOTH_WORKLOAD_MINT_CREDENTIAL", "BOOTH_CORE_URL", "BOOTH_INTERNAL_ADDR",
 	"BOOTH_INTERNAL_URL", "BOOTH_APP_SIDECAR_IMAGE", "BOOTH_APP_SIDECAR_RESOURCES", "BOOTH_APP_DATABASE", "BOOTH_DATA_REFRESH_MAX",
+	"BOOTH_FILES_MAX_OBJECT_BYTES", "BOOTH_FILES_OBJECT_TIMEOUT", "BOOTH_FILES_META_TIMEOUT", "BOOTH_FILES_MAX_CONCURRENT",
 }
 
 // minimal is the smallest valid environment.
@@ -188,5 +189,38 @@ func TestLoad_DataAccess(t *testing.T) {
 	setEnv(t, env)
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "digest-pinned") {
 		t.Errorf("a tag-pinned sidecar image was accepted: %v", err)
+	}
+}
+
+func TestLoad_FileProxyLimits(t *testing.T) {
+	setEnv(t, dataEnv())
+	cfg, err := Load()
+	if err != nil || cfg.Data.FilesMaxObjectBytes != 0 || cfg.Data.FilesMaxConcurrent != 0 {
+		t.Fatalf("defaults must be zero (the package defaults apply): %+v %v", cfg.Data, err)
+	}
+	env := dataEnv()
+	env["BOOTH_FILES_MAX_OBJECT_BYTES"] = "1048576"
+	env["BOOTH_FILES_OBJECT_TIMEOUT"] = "1m"
+	env["BOOTH_FILES_META_TIMEOUT"] = "5s"
+	env["BOOTH_FILES_MAX_CONCURRENT"] = "2"
+	setEnv(t, env)
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := cfg.Data
+	if d.FilesMaxObjectBytes != 1<<20 || d.FilesObjectTimeout != time.Minute || d.FilesMetaTimeout != 5*time.Second || d.FilesMaxConcurrent != 2 {
+		t.Errorf("file proxy limits %+v", d)
+	}
+	for name, bad := range map[string]string{
+		"BOOTH_FILES_MAX_OBJECT_BYTES": "0", "BOOTH_FILES_OBJECT_TIMEOUT": "soon",
+		"BOOTH_FILES_META_TIMEOUT": "-1s", "BOOTH_FILES_MAX_CONCURRENT": "many",
+	} {
+		env := dataEnv()
+		env[name] = bad
+		setEnv(t, env)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s=%q: %v", name, bad, err)
+		}
 	}
 }

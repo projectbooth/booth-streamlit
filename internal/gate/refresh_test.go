@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -87,5 +89,59 @@ func TestRefresher_BackendErrorKeepsTheFile(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(file); string(b) != "still-valid" {
 		t.Error("a transient backend error removed a still-valid token")
+	}
+}
+
+// The loopback listener forwards /files/... to the backend with the app's bearer, replacing any
+// Authorization the caller sent, and passes the path exactly as written: no cleaning of "..", no
+// decoding of %2F, so the backend sees (and refuses) what app code asked for.
+func TestLoopback_ForwardsFilesWithTheBearerAndTheRawPath(t *testing.T) {
+	var got *http.Request
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Clone(context.Background())
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer backend.Close()
+	u, _ := url.Parse(backend.URL)
+	lb := httptest.NewServer(Loopback(&Refresher{}, u, bearer))
+	defer lb.Close()
+
+	for _, raw := range []string{
+		"/files/storage/b/sales/q1.csv?x=1",
+		"/files/storage/b/sales/../other/secret.csv",
+		"/files/storage/b/sales%2F..%2Fsecret.csv",
+	} {
+		req, _ := http.NewRequest(http.MethodPut, lb.URL+"/x", nil)
+		req.URL.Opaque = "//" + req.URL.Host + raw
+		req.Header.Set("Authorization", "Bearer app-code-guess")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 || got == nil {
+			t.Fatalf("%s: %d (a redirect means the path was cleaned)", raw, resp.StatusCode)
+		}
+		if got.Header.Get("Authorization") != "Bearer "+bearer {
+			t.Errorf("%s: backend saw Authorization %q", raw, got.Header.Get("Authorization"))
+		}
+		if got.Method != http.MethodPut {
+			t.Errorf("method changed to %s; the backend must see (and refuse) the real method", got.Method)
+		}
+		want, _, _ := strings.Cut(raw, "?")
+		if got.URL.EscapedPath() != want {
+			t.Errorf("backend saw %q, want %q exactly", got.URL.EscapedPath(), want)
+		}
+	}
+
+	resp, _ := http.Get(lb.URL + "/elsewhere")
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("unknown loopback path: %d", resp.StatusCode)
+	}
+	resp, _ = http.Get(lb.URL + StatusPath)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("status path: %d", resp.StatusCode)
 	}
 }

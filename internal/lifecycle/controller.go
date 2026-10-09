@@ -57,6 +57,8 @@ type DataConfig struct {
 	TokenURL string
 	// BrokerURL is the backend's broker forwarder base; the sidecars' --core-url.
 	BrokerURL string
+	// FilesURL is the backend's internal base the gate forwards /files/... to (the file read proxy).
+	FilesURL string
 	// SidecarImage is booth-core's credential sidecar, digest-pinned.
 	SidecarImage     string
 	SidecarResources corev1.ResourceRequirements

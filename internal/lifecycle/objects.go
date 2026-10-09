@@ -224,9 +224,16 @@ func addDataAccess(cfg Config, a apps.App, spec *corev1.PodSpec, sc corev1.Secur
 			if data.RefreshMax != "" {
 				c.Env = append(c.Env, corev1.EnvVar{Name: "BOOTH_GATE_REFRESH_MAX", Value: data.RefreshMax})
 			}
+			if data.FilesURL != "" {
+				c.Env = append(c.Env, corev1.EnvVar{Name: "BOOTH_GATE_FILES_URL", Value: data.FilesURL})
+			}
 			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "token", MountPath: tokenDir})
 		case "streamlit":
 			c.Env = append(c.Env, corev1.EnvVar{Name: "BOOTH_DATA_STATUS_URL", Value: "http://" + statusAddr + "/_booth/data/status"})
+			if data.FilesURL != "" {
+				// The file read proxy, through the gate on loopback (booth_streamlit.files).
+				c.Env = append(c.Env, corev1.EnvVar{Name: "BOOTH_FILES_URL", Value: "http://" + statusAddr + "/files"})
+			}
 			if data.Database {
 				c.Env = append(c.Env, corev1.EnvVar{Name: "DATABASE_URL", Value: "postgresql://localhost:5432/" + WorkspaceDatabase(a.Workspace)})
 			}

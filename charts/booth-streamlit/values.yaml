@@ -132,6 +132,15 @@ dataAccess:
       namespaceSelector: {kubernetes.io/metadata.name: booth-database}
       podSelector: {app.kubernetes.io/name: booth-database, app.kubernetes.io/component: postgres}
       port: 5432
+  # The file read proxy (booth_streamlit.files): booth-storage objects and catalog file datasets,
+  # read only, as the app's owner capped at viewer. booth-storage and booth-catalog must trust
+  # booth-core's workload-token issuer (booth-storage oidc.workloadIssuerUrl, booth-catalog
+  # workloadIdentity.issuerUrl), or they refuse the app's token.
+  files:
+    maxObjectBytes: 536870912 # 512 MiB per object
+    objectTimeout: 5m
+    metaTimeout: 30s # dataset lookups and listings
+    maxConcurrent: 4 # reads at once, per app
   # Test knob: re-mint tokens and re-fetch them in app pods at least this often (e.g. 20s), so a lost
   # owner is noticed in seconds. Empty (the default): two thirds of a token's life (~6.7 minutes).
   refreshMax: ""

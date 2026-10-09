@@ -83,6 +83,14 @@ func run() error {
 			Apps:    svc,
 			Tokens:  &dataaccess.Tokens{Minter: &dataaccess.CoreMinter{URL: cfg.Data.MintURL, Credential: cfg.Data.MintCredential}, MaxAge: cfg.Data.RefreshMax},
 			CoreURL: cfg.Data.CoreURL,
+			// The file read proxy: storage and catalog files through core's gateway, as the app.
+			Files: &dataaccess.Files{
+				GatewayURL:     cfg.Data.CoreURL,
+				MaxObjectBytes: cfg.Data.FilesMaxObjectBytes,
+				ObjectTimeout:  cfg.Data.FilesObjectTimeout,
+				MetaTimeout:    cfg.Data.FilesMetaTimeout,
+				MaxConcurrent:  cfg.Data.FilesMaxConcurrent,
+			},
 		}
 		internal := &http.Server{Addr: cfg.Data.InternalAddr, Handler: in.Router(), ReadHeaderTimeout: 10 * time.Second}
 		go func() {
@@ -171,6 +179,7 @@ func newLifecycle(ctx context.Context, l config.Lifecycle, d config.Data, svc *a
 		data = &lifecycle.DataConfig{
 			TokenURL:         strings.TrimRight(d.InternalURL, "/") + "/internal/token",
 			BrokerURL:        strings.TrimRight(d.InternalURL, "/") + "/internal/broker",
+			FilesURL:         strings.TrimRight(d.InternalURL, "/"),
 			SidecarImage:     d.SidecarImage,
 			SidecarResources: sideRes,
 			Database:         d.Database,

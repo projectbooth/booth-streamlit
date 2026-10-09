@@ -239,3 +239,27 @@ limits, outbox ordering, and pip failure messages.
    is what ends an open Postgres lease (up to one hour) early. Copied S3 keys (8.3) outlive both.
 
 Not built until you rule.
+
+## As built: step b, the file read proxy
+
+Built as item 4 describes. Details the plan didn't spell out:
+
+- **App code never holds the bearer.** It calls the gate's loopback listener (`BOOTH_FILES_URL`,
+  `127.0.0.1:8090/files`). The gate replaces any `Authorization` it was sent with the app's bearer,
+  and forwards the method and the path exactly as written.
+- **No path cleaning in the gate.** The listener is deliberately not Go's `http.ServeMux`, because
+  `ServeMux` "cleans" a path containing `..` and redirects to the result. That would quietly turn a
+  refused traversal into an allowed read. The backend sees and refuses the raw path.
+- **The backend checks the escaped path** before decoding it, so `%2F`, `%5C` and `%00` are refused
+  even where they would decode to a valid path.
+- **"Within the dataset's location"** means the full object path equals the location or is under it
+  at a `/` boundary. A location `sales` admits `sales/q1.csv`, not `salesman/x.csv`.
+- **Responses:**
+  - Another workspace's backend or dataset is **404**, the same answer booth-storage and
+    booth-catalog give for anything outside the caller's workspace.
+  - Listings are capped at 1000 entries per page.
+  - Over the object size limit is **413**; over the concurrency limit is **429**.
+- **Deployment requirement:** booth-storage and booth-catalog must trust booth-core's
+  workload-token issuer (`oidc.workloadIssuerUrl` and `workloadIdentity.issuerUrl`), or they refuse
+  every app's token.
+

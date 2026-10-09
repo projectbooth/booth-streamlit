@@ -50,8 +50,16 @@ func main() {
 		if host, _, _ := strings.Cut(statusAddr, ":"); host != "127.0.0.1" {
 			log.Fatal("BOOTH_GATE_STATUS_LISTEN must be a 127.0.0.1 address: it is for the app's own code only")
 		}
+		var filesURL *url.URL
+		if v := os.Getenv("BOOTH_GATE_FILES_URL"); v != "" {
+			u, err := url.Parse(v)
+			if err != nil || u.Host == "" {
+				log.Fatalf("BOOTH_GATE_FILES_URL: %q is not a URL", v)
+			}
+			filesURL = u
+		}
 		go func() {
-			s := &http.Server{Addr: statusAddr, Handler: r.StatusHandler(), ReadHeaderTimeout: 5 * time.Second}
+			s := &http.Server{Addr: statusAddr, Handler: gate.Loopback(r, filesURL, bearer), ReadHeaderTimeout: 5 * time.Second}
 			log.Fatal(s.ListenAndServe())
 		}()
 	}
