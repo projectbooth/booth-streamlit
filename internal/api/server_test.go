@@ -10,6 +10,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/projectbooth/booth-streamlit/internal/apps"
 	"github.com/projectbooth/booth-streamlit/internal/events"
 )
 
@@ -117,5 +118,24 @@ func TestNoWebDirServesNoUI(t *testing.T) {
 	}
 	if WebDir("") != nil {
 		t.Error("WebDir(\"\") should be nil")
+	}
+}
+
+type fakeOutbox apps.OutboxStats
+
+func (f fakeOutbox) OutboxStats(context.Context) (apps.OutboxStats, error) {
+	return apps.OutboxStats(f), nil
+}
+
+// Dashboard events: pending ones are reported; a failed one (given up on after its attempts) makes
+// the module degraded, with the error, so an operator sees it.
+func TestHealthz_Outbox(t *testing.T) {
+	_, body := get(t, NewRouter(Deps{DB: fakeDB{}, Bus: fakeBus(events.StateConnected), Outbox: fakeOutbox{Pending: 2}}), "/healthz")
+	if body["status"] != "ok" || body["eventsPending"] != "2" || body["eventsFailed"] != "0" {
+		t.Errorf("pending: %v", body)
+	}
+	rec, body := get(t, NewRouter(Deps{DB: fakeDB{}, Bus: fakeBus(events.StateConnected), Outbox: fakeOutbox{Failed: 1, LastError: "nats: maximum payload exceeded"}}), "/healthz")
+	if rec.Code != 200 || body["status"] != "degraded" || body["eventsFailed"] != "1" || body["eventsLastError"] != "nats: maximum payload exceeded" {
+		t.Errorf("failed: %d %v", rec.Code, body)
 	}
 }

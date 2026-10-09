@@ -70,6 +70,9 @@ func run() error {
 		return err
 	}
 	svc := apps.NewService(store, cfg.MaxSourceBytes)
+	// Dashboard events (ADR 0018/0046): the app model writes them to the outbox with each change;
+	// this drains them to the bus, at least once, surviving restarts and bus outages.
+	go (&events.Drainer{Store: store, Bus: bus}).Run(ctx)
 	svc.SetCaps(apps.Caps{MaxRunning: cfg.Lifecycle.MaxRunning, MaxRunningPerWorkspace: cfg.Lifecycle.MaxPerWS})
 
 	// One token cache per backend: the gates' refresh, the file proxy and the warehouse lookup all
@@ -112,13 +115,19 @@ func run() error {
 	} else {
 		log.Print("data access is off (dataAccess.enabled=false): apps run without database or file access")
 	}
+	// Declared sources: the editor lists catalog datasets read as the owner, with a token minted
+	// for them, so it needs data access (the minting credential).
+	var datasets api.DatasetLister
+	if cfg.Data.Enabled {
+		datasets = &dataaccess.CatalogDatasets{GatewayURL: cfg.Data.CoreURL, Minter: &dataaccess.CoreMinter{URL: cfg.Data.MintURL, Credential: cfg.Data.MintCredential}}
+	}
 	svc.OnChange = ctrl.OnAppChange
 	go ctrl.Run(ctx)
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: api.NewRouter(api.Deps{
-			DB: pool, Bus: bus, Web: api.WebDir(cfg.WebDir),
+			DB: pool, Bus: bus, Outbox: store, Datasets: datasets, Web: api.WebDir(cfg.WebDir),
 			Verifier: verifier, Apps: svc, Status: ctrl.Status, DataAccess: cfg.Data.Enabled,
 			Proxy: &proxy.Handler{
 				Verifier:     verifier,

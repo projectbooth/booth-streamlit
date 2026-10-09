@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,7 +20,9 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/projectbooth/booth-streamlit/internal/apps"
+	"github.com/projectbooth/booth-streamlit/internal/dataaccess"
 	"github.com/projectbooth/booth-streamlit/internal/events"
+	"github.com/projectbooth/booth-streamlit/internal/identity"
 )
 
 // Pinger is the database check /healthz runs; *pgxpool.Pool satisfies it.
@@ -32,10 +35,23 @@ type BusState interface {
 	State() events.State
 }
 
+// Outbox reports the dashboard-event outbox; *apps.PostgresStore satisfies it.
+type Outbox interface {
+	OutboxStats(ctx context.Context) (apps.OutboxStats, error)
+}
+
+// DatasetLister lists catalog datasets as a caller; *dataaccess.CatalogDatasets satisfies it.
+type DatasetLister interface {
+	List(ctx context.Context, c identity.Caller, q string) ([]dataaccess.DatasetSummary, int, error)
+}
+
 // Deps is what the router needs.
 type Deps struct {
-	DB  Pinger
-	Bus BusState
+	DB     Pinger
+	Bus    BusState
+	Outbox Outbox
+	// Datasets lists catalog datasets for declaring sources; nil without data access.
+	Datasets DatasetLister
 	// Web is the built UI (web/dist). Nil serves no UI.
 	Web fs.FS
 	// Proxy serves /apps/{id}/...; nil serves no apps.
@@ -67,7 +83,7 @@ func NewRouter(deps Deps) http.Handler {
 	})
 	r.Get("/healthz", healthz(deps))
 	if deps.Verifier != nil && deps.Apps != nil {
-		mountAppAPI(r, deps.Verifier, deps.Apps, deps.Status, deps.DataAccess)
+		mountAppAPI(r, deps)
 	}
 	if deps.Proxy != nil {
 		deps.Proxy.Mount(r)
@@ -101,6 +117,19 @@ func healthz(deps Deps) http.HandlerFunc {
 			body["eventBus"] = string(st)
 			if st == events.StateConnecting && code == http.StatusOK {
 				body["status"] = "degraded"
+			}
+		}
+		// Dashboard events not yet on the bus, and those given up on (an operator should look:
+		// they are in app_events_outbox with their last error).
+		if deps.Outbox != nil {
+			if st, err := deps.Outbox.OutboxStats(ctx); err == nil {
+				body["eventsPending"], body["eventsFailed"] = strconv.Itoa(st.Pending), strconv.Itoa(st.Failed)
+				if st.Failed > 0 {
+					body["eventsLastError"] = st.LastError
+					if code == http.StatusOK {
+						body["status"] = "degraded"
+					}
+				}
 			}
 		}
 		writeJSON(w, code, body)

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { api, type AppInput } from "./api";
-import { ErrorText, SHARED_DATA_WORDING, TrustNote } from "./components";
+import { api, type AppInput, type Dataset } from "./api";
+import { ErrorText, SHARED_DATA_WORDING, SOURCES_WORDING, TrustNote } from "./components";
 import { useAsync } from "./useAsync";
 
 const STARTER = `import streamlit as st
@@ -11,7 +11,7 @@ st.title("Hello")
 st.write(f"Viewing as {viewer.subject if viewer else 'unknown'}")
 `;
 
-const empty: AppInput = { name: "", description: "", source: STARTER, requirements: "", shared: false };
+const empty: AppInput = { name: "", description: "", source: STARTER, requirements: "", sources: [], shared: false };
 
 /** Create (no id) or edit an app. Owners only; the backend refuses anyone else. */
 export function AppEditor({ id, onDone }: { id?: string; onDone: () => void }) {
@@ -20,7 +20,7 @@ export function AppEditor({ id, onDone }: { id?: string; onDone: () => void }) {
   if (loaded.status === "error") return <ErrorText error={loaded.error} />;
   const a = loaded.data;
   const initial = a
-    ? { name: a.name, description: a.description, source: a.source ?? "", requirements: a.requirements ?? "", shared: a.shared }
+    ? { name: a.name, description: a.description, source: a.source ?? "", requirements: a.requirements ?? "", sources: a.sources ?? [], shared: a.shared }
     : empty;
   return <Form id={id} initial={initial} onDone={onDone} />;
 }
@@ -83,6 +83,7 @@ function Form({ id, initial, onDone }: { id?: string; initial: AppInput; onDone:
           One package per line, no pip options. Installed every time the app starts, which makes starting slower.
         </span>
       </label>
+      <Sources selected={form.sources} onChange={(v) => set("sources", v)} />
       {error && <ErrorText error={error} />}
       <div className="flex items-center gap-2 text-sm">
         <button type="submit" disabled={busy} className="rounded bg-gray-900 px-3 py-1.5 text-white disabled:opacity-50 dark:bg-gray-100 dark:text-gray-900">
@@ -102,5 +103,54 @@ function Form({ id, initial, onDone }: { id?: string; initial: AppInput; onDone:
         )}
       </div>
     </form>
+  );
+}
+
+/** Declared sources: catalog datasets, listed as the signed-in owner can read them. */
+function Sources({ selected, onChange }: { selected: string[]; onChange: (v: string[]) => void }) {
+  const [list] = useAsync(() => api.datasets(), []);
+  const [filter, setFilter] = useState("");
+  if (list.status === "loading") return <p className="text-sm">Loading catalog datasets…</p>;
+  if (list.status === "error") {
+    // 404: this install has no data access, so the list can't be read as you; nothing to declare.
+    if ((list.error as { status?: number }).status === 404) return null;
+    return <ErrorText error={list.error} />;
+  }
+  const known = new Map(list.data.datasets.map((d: Dataset) => [d.id, d]));
+  const toggle = (id: string) => onChange(selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
+  const shown = list.data.datasets.filter((d) => d.name.toLowerCase().includes(filter.toLowerCase()));
+  return (
+    <fieldset className="space-y-2 text-sm">
+      <legend>Sources (optional)</legend>
+      <p className="text-xs text-gray-600 dark:text-gray-400">{SOURCES_WORDING}</p>
+      {list.data.datasets.length > 10 && (
+        <input className="w-full rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-700 dark:bg-gray-900" placeholder="Filter datasets" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      )}
+      {list.data.datasets.length === 0 && <p className="text-xs">No catalog datasets you can read in this workspace.</p>}
+      <ul className="max-h-48 space-y-1 overflow-auto">
+        {selected
+          .filter((id) => !known.has(id))
+          .map((id) => (
+            <li key={id}>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked onChange={() => toggle(id)} />
+                <span>{id} (not in the catalog, or not readable by you)</span>
+              </label>
+            </li>
+          ))}
+        {shown.map((d) => (
+          <li key={d.id}>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={selected.includes(d.id)} onChange={() => toggle(d.id)} />
+              <span>{d.name}</span>
+              <span className="text-xs text-gray-500">{d.format}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      {list.data.total > list.data.datasets.length && (
+        <p className="text-xs">Showing {list.data.datasets.length} of {list.data.total} datasets.</p>
+      )}
+    </fieldset>
   );
 }

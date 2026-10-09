@@ -1,20 +1,23 @@
 // Package events holds booth-streamlit's event-bus connection (NATS, ADR 0021), over which it
 // publishes dashboard.created/updated/deleted for each app (ADR 0018, payload per ADR 0046).
 //
-// The scaffold only connects and reports its state through /healthz; the publisher arrives with
-// the app model. Connecting now is still worth it: it proves end to end that the manifest's
-// `events` declaration made booth-core mint a credential (ADR 0050) and that the credential works,
-// which is the step that silently failed for booth-catalog before it declared `events`.
+// Events reach the bus through an outbox (outbox.go): the app model writes each event in the same
+// transaction as its change, and the Drainer publishes them here with JetStream acknowledgements.
 package events
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
+
+// ErrNotConnected: there is no live bus connection to publish on.
+var ErrNotConnected = errors.New("event bus not connected")
 
 // State is the bus connection's observable state, reported verbatim on /healthz.
 type State string
@@ -45,6 +48,7 @@ type Bus struct {
 
 	mu    sync.Mutex
 	state State
+	nc    *nats.Conn
 }
 
 // New returns a Bus that has not connected yet. An empty URL yields a permanently disabled Bus.
@@ -108,7 +112,39 @@ func (b *Bus) Run(ctx context.Context) {
 	if nc.IsConnected() {
 		b.setState(StateConnected)
 	}
+	b.mu.Lock()
+	b.nc = nc
+	b.mu.Unlock()
 
 	<-ctx.Done()
+	b.mu.Lock()
+	b.nc = nil
+	b.mu.Unlock()
 	nc.Close()
+}
+
+// Connected reports whether there is a live connection to publish on.
+func (b *Bus) Connected() bool {
+	b.mu.Lock()
+	nc := b.nc
+	b.mu.Unlock()
+	return nc != nil && nc.IsConnected()
+}
+
+// Publish publishes to JetStream and waits for its acknowledgement: the event is stored in
+// booth-core's stream (ADR 0026) when this returns nil. msgID is JetStream's de-duplication id,
+// so a redelivered outbox row inside the stream's duplicate window is stored once.
+func (b *Bus) Publish(ctx context.Context, subject string, data []byte, msgID string) error {
+	b.mu.Lock()
+	nc := b.nc
+	b.mu.Unlock()
+	if nc == nil || !nc.IsConnected() {
+		return ErrNotConnected
+	}
+	js, err := jetstream.New(nc)
+	if err != nil {
+		return err
+	}
+	_, err = js.Publish(ctx, subject, data, jetstream.WithMsgID(msgID))
+	return err
 }

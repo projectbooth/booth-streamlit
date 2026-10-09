@@ -15,6 +15,10 @@ export function TrustNote() {
 /** ADR 0107 item 4: what a shared app can read, in plain words. */
 export const SHARED_DATA_WORDING = "This app can read any data you can read in this workspace.";
 
+/** ADR 0107 item 4: declared sources are lineage, not a limit. */
+export const SOURCES_WORDING =
+  "Sources tell the catalog what this app reads, so it can show where the app's data comes from. They don't limit what the app can read: it can still read any data its owner can read in this workspace.";
+
 export function ErrorText({ error }: { error: Error }) {
   const msg = error instanceof ApiError && error.status === 403 ? "Only workspace owners can do that." : error.message;
   return <p role="alert" className="text-sm text-red-700 dark:text-red-400">{msg}</p>;

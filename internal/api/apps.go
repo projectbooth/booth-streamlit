@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/projectbooth/booth-streamlit/internal/apps"
+	"github.com/projectbooth/booth-streamlit/internal/dataaccess"
 	"github.com/projectbooth/booth-streamlit/internal/identity"
 	"github.com/projectbooth/booth-streamlit/internal/lifecycle"
 )
@@ -39,14 +40,17 @@ const maxBodyBytes = 1 << 20
 //	POST   /api/apps/{id}/take-ownership   become the app's owner while its data access is paused
 //	                                (owners; ADR 0107 item 7, logged)
 //	GET    /api/apps/{id}/ownership-changes   the app's recorded take-overs
-func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service, status StatusFunc, dataAccess bool) {
+//	GET    /api/catalog/datasets?q=   catalog datasets to declare as sources, read as the caller
+//	                                (owners; needs data access, which mints the token)
+func mountAppAPI(r chi.Router, deps Deps) {
+	v, svc, status, dataAccess := deps.Verifier, deps.Apps, deps.Status, deps.DataAccess
 	r.Route("/api", func(r chi.Router) {
 		r.Use(authenticate(v))
 		r.Get("/me", func(w http.ResponseWriter, r *http.Request) {
 			c := caller(r)
 			writeJSON(w, http.StatusOK, map[string]any{
 				"subject": c.Subject, "workspace": c.Workspace, "role": c.Role, "canAuthor": apps.CanAuthor(c),
-				"dataAccess": dataAccess,
+				"dataAccess": dataAccess, "catalogSources": deps.Datasets != nil,
 			})
 		})
 		r.Get("/apps", func(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +108,31 @@ func mountAppAPI(r chi.Router, v Verifier, svc *apps.Service, status StatusFunc,
 				changes = []apps.OwnershipChange{}
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"changes": changes})
+		})
+		r.Get("/catalog/datasets", func(w http.ResponseWriter, r *http.Request) {
+			c := caller(r)
+			if !apps.CanAuthor(c) {
+				writeErr(w, apps.ErrForbidden)
+				return
+			}
+			if deps.Datasets == nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "listing catalog datasets needs the module's data access (dataAccess.enabled)"})
+				return
+			}
+			items, total, err := deps.Datasets.List(r.Context(), c, r.URL.Query().Get("q"))
+			switch {
+			case errors.Is(err, dataaccess.ErrOwnerNoAccess):
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+				return
+			case err != nil:
+				log.Printf("api: listing catalog datasets for %s in %s: %v", c.Subject, c.Workspace, err)
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": "booth-catalog could not be read"})
+				return
+			}
+			if items == nil {
+				items = []dataaccess.DatasetSummary{}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"datasets": items, "total": total})
 		})
 	})
 }

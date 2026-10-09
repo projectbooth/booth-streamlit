@@ -94,7 +94,7 @@ func (s *Service) Create(ctx context.Context, c identity.Caller, in Input) (App,
 	now := s.now().UTC()
 	a := App{
 		ID: newID(), Workspace: c.Workspace, GateBearer: newBearer(), Owner: c.Subject,
-		Name: in.Name, Description: in.Description, Source: in.Source, Requirements: in.Requirements, Shared: in.Shared,
+		Name: in.Name, Description: in.Description, Source: in.Source, Requirements: in.Requirements, Sources: in.Sources, Shared: in.Shared,
 		DesiredState: Stopped, CreatedBy: c.Subject, CreatedAt: now, UpdatedBy: c.Subject, UpdatedAt: now,
 	}
 	if err := s.store.Create(ctx, a); err != nil {
@@ -114,7 +114,7 @@ func (s *Service) Update(ctx context.Context, c identity.Caller, id string, in I
 	if err != nil {
 		return App{}, err
 	}
-	cur.Name, cur.Description, cur.Source, cur.Requirements, cur.Shared = in.Name, in.Description, in.Source, in.Requirements, in.Shared
+	cur.Name, cur.Description, cur.Source, cur.Requirements, cur.Sources, cur.Shared = in.Name, in.Description, in.Source, in.Requirements, in.Sources, in.Shared
 	cur.UpdatedBy, cur.UpdatedAt = c.Subject, s.now().UTC()
 	if err := s.store.Update(ctx, cur); err != nil {
 		return App{}, err
@@ -265,6 +265,11 @@ func (s *Service) validate(in Input) (Input, error) {
 	if err := validateRequirements(in.Requirements); err != nil {
 		return Input{}, err
 	}
+	src, err := validateSources(in.Sources)
+	if err != nil {
+		return Input{}, err
+	}
+	in.Sources = src
 	return in, nil
 }
 

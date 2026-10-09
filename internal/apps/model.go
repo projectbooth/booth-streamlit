@@ -33,7 +33,10 @@ type App struct {
 	Description string `json:"description"`
 	Source      string `json:"source,omitempty"` // omitted in lists
 	// Requirements is the app's optional requirements.txt, installed into its pod on every start.
-	Requirements string       `json:"requirements,omitempty"` // omitted in lists
+	Requirements string `json:"requirements,omitempty"` // omitted in lists
+	// Sources are catalog dataset ids the owner declared the app reads: lineage only, never a
+	// restriction on what it can read (ADR 0107 item 4).
+	Sources      []string     `json:"sources"`
 	Shared       bool         `json:"shared"`
 	DesiredState DesiredState `json:"desiredState"`
 	// Suspended: idle shutdown stopped the container; DesiredState is still Running and any
@@ -63,7 +66,9 @@ type Input struct {
 	Source      string `json:"source"`
 	// Requirements: an optional requirements.txt (package specifiers only; no pip options).
 	Requirements string `json:"requirements"`
-	Shared       bool   `json:"shared"`
+	// Sources: catalog dataset ids, lineage only (at most 50).
+	Sources []string `json:"sources"`
+	Shared  bool     `json:"shared"`
 }
 
 // Limits on Input. Source is bounded well under a Kubernetes ConfigMap's ~1 MiB, which is how the

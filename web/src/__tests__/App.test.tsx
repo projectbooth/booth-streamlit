@@ -144,6 +144,22 @@ describe("editor", () => {
     expect((post.body as { source: string }).source).toContain("booth_streamlit.user()");
   });
 
+  it("declares catalog datasets as sources, saying they don't limit what the app reads", async () => {
+    const calls = backend("owner", [], {
+      "GET api/catalog/datasets": () =>
+        new Response(JSON.stringify({ datasets: [{ id: "ds-1", name: "Orders", description: "", format: "file" }], total: 1 }), { status: 200 }),
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "New app" }));
+    expect(await screen.findByText(/don't limit what the app can read/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Name"), "Revenue");
+    await userEvent.click(screen.getByLabelText(/Orders/));
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url === "api/apps")).toBe(true));
+    const post = calls.find((c) => c.method === "POST" && c.url === "api/apps")!;
+    expect(post.body).toMatchObject({ sources: ["ds-1"] });
+  });
+
   it("deletes only on a second click, without a browser dialog", async () => {
     const confirmSpy = vi.spyOn(window, "confirm");
     const calls = backend("owner", [shared], {
