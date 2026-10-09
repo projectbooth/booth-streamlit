@@ -238,7 +238,7 @@ func TestChart_Pip(t *testing.T) {
 		return out
 	}
 	if got, want := env(), map[string]string{
-		"BOOTH_APP_PIP_INDEX_URL": "", "BOOTH_APP_PIP_TIMEOUT": "5m", "BOOTH_APP_PIP_SITE_SIZE_LIMIT": "1Gi", "BOOTH_APP_PIP_EGRESS_CLOSED": "false",
+		"BOOTH_APP_PIP_INDEX_URL": "", "BOOTH_APP_PIP_TRUSTED_HOST": "", "BOOTH_APP_PIP_TIMEOUT": "5m", "BOOTH_APP_PIP_SITE_SIZE_LIMIT": "1Gi", "BOOTH_APP_PIP_EGRESS_CLOSED": "false",
 	}; !reflect.DeepEqual(got, want) {
 		t.Errorf("defaults %v, want %v", got, want)
 	}

@@ -93,6 +93,10 @@ apps:
     # The package index (PIP_INDEX_URL). Empty: pip's default, PyPI, reached through
     # apps.egress.mode=open. An in-cluster mirror also needs apps.pip.egress below.
     indexUrl: ""
+    # pip ignores an index served over plain HTTP unless its host is trusted (PIP_TRUSTED_HOST).
+    # Set this to that host only for an HTTP index you control, e.g. an in-cluster mirror: it
+    # gives up transport integrity for it. Leave empty for HTTPS.
+    trustedHost: ""
     # The whole install's limit: a pip that hangs fails the app with a clear message instead of
     # leaving it starting. pip's own --timeout (20s) is per network read and doesn't catch a slow
     # trickle.

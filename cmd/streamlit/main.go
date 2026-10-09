@@ -213,6 +213,6 @@ func newLifecycle(ctx context.Context, l config.Lifecycle, d config.Data, svc *a
 		PullPolicy: corev1.PullPolicy(l.PullPolicy), ServiceAccount: l.ServiceAccount,
 		AppResources: appRes, GateResources: gateRes, TmpSizeLimit: l.TmpSizeLimit,
 		IdleTimeout: l.IdleTimeout, Owner: self,
-		Pip: lifecycle.PipConfig{IndexURL: l.PipIndexURL, Deadline: l.PipTimeout, SiteSizeLimit: l.PipSiteSizeLimit, EgressClosed: l.PipEgressClosed},
+		Pip: lifecycle.PipConfig{IndexURL: l.PipIndexURL, TrustedHost: l.PipTrustedHost, Deadline: l.PipTimeout, SiteSizeLimit: l.PipSiteSizeLimit, EgressClosed: l.PipEgressClosed},
 	}, client, svc), nil
 }

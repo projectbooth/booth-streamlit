@@ -723,7 +723,7 @@ func (r *rig) createWithRequirements(name, req string) apps.App {
 // even with every data-access sidecar in the pod. Streamlit gets site read only, on PYTHONPATH.
 func TestDeployment_PipInitContainer(t *testing.T) {
 	r, _ := lakeRig(t, acmeWarehouse, nil)
-	r.c.cfg.Pip = PipConfig{IndexURL: "http://pypi.booth-pypi.svc:8080/simple", Deadline: 90 * time.Second, SiteSizeLimit: "1Gi", EgressClosed: true}
+	r.c.cfg.Pip = PipConfig{IndexURL: "http://pypi.booth-pypi.svc:8080/simple", TrustedHost: "pypi.booth-pypi.svc", Deadline: 90 * time.Second, SiteSizeLimit: "1Gi", EgressClosed: true}
 	a := r.createWithRequirements("Sales", "humanize==4.12.0\n")
 	r.start(a)
 	d := r.deployment(a.ID)
@@ -753,6 +753,7 @@ func TestDeployment_PipInitContainer(t *testing.T) {
 	if want := map[string]string{
 		"BOOTH_PIP_REQUIREMENTS": "/app/requirements.txt", "BOOTH_PIP_TARGET": "/opt/booth/site",
 		"BOOTH_PIP_DEADLINE_SECONDS": "90", "BOOTH_PIP_EGRESS_CLOSED": "true", "PIP_INDEX_URL": "http://pypi.booth-pypi.svc:8080/simple",
+		"PIP_TRUSTED_HOST": "pypi.booth-pypi.svc",
 	}; !reflect.DeepEqual(env, want) {
 		t.Errorf("pip env %v, want %v", env, want)
 	}

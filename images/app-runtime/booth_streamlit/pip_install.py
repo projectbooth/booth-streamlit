@@ -22,6 +22,7 @@ Environment (set by the module's lifecycle):
     BOOTH_PIP_DEADLINE_SECONDS  the whole install's limit
     BOOTH_PIP_EGRESS_CLOSED     "true" when apps.egress.mode is closed and no package index is reachable
     PIP_INDEX_URL               the operator's package index, if not PyPI (read by pip itself)
+    PIP_TRUSTED_HOST            that index's host, when it is plain HTTP (read by pip itself)
 """
 
 from __future__ import annotations
