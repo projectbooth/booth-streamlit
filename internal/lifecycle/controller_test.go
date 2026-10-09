@@ -414,6 +414,7 @@ func dataRig(t *testing.T) *rig {
 	r.c.cfg.Data = &DataConfig{
 		TokenURL:     "http://booth-streamlit.booth-streamlit.svc:8081/internal/token",
 		BrokerURL:    "http://booth-streamlit.booth-streamlit.svc:8081/internal/broker",
+		FilesURL:     "http://booth-streamlit.booth-streamlit.svc:8081",
 		SidecarImage: "ghcr.io/projectbooth/credential-sidecar@sha256:6a0a795efd27f165e0714beb163d91f5c2feff55cfdc6f287aee979ae02cce14",
 		Database:     true,
 	}
@@ -485,6 +486,17 @@ func TestDeployment_DataAccessKeepsTheTokenAwayFromUserCode(t *testing.T) {
 	}
 	if env["DATABASE_URL"] != "postgresql://localhost:5432/"+WorkspaceDatabase("acme") {
 		t.Errorf("DATABASE_URL = %q", env["DATABASE_URL"])
+	}
+	// The file read proxy: app code calls its gate on loopback, never the backend directly.
+	if env["BOOTH_FILES_URL"] != "http://127.0.0.1:8090/files" {
+		t.Errorf("BOOTH_FILES_URL = %q", env["BOOTH_FILES_URL"])
+	}
+	gateEnv := map[string]string{}
+	for _, e := range container(t, d, "gate").Env {
+		gateEnv[e.Name] = e.Value
+	}
+	if gateEnv["BOOTH_GATE_FILES_URL"] != "http://booth-streamlit.booth-streamlit.svc:8081" {
+		t.Errorf("BOOTH_GATE_FILES_URL = %q", gateEnv["BOOTH_GATE_FILES_URL"])
 	}
 	if env["BOOTH_DATA_STATUS_URL"] != "http://127.0.0.1:8090/_booth/data/status" {
 		t.Errorf("status URL %q", env["BOOTH_DATA_STATUS_URL"])

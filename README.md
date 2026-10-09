@@ -21,8 +21,9 @@ user code sees a request.
 Data access (ADR 0104/0107, `docs/design-data-access.md`), built in five steps; done so far:
 **(a)** each app's workload token (owner = the app's owner, capped at viewer), the gate's token
 refresh over the backend's internal port, the Postgres credential sidecar (`DATABASE_URL` in the
-app), "Data access paused" and Take ownership. Off unless `dataAccess.enabled`. Not built yet:
-(b) the file read proxy, (c) lakehouse, (d) per-app `pip install`, (e) `dashboard.*` publishing. Design: `docs/design-v0.md`, including its
+app), "Data access paused" and Take ownership; **(b)** the file read proxy for booth-storage objects
+and catalog file datasets (`booth_streamlit.files`). Off unless `dataAccess.enabled`. Not built yet:
+(c) lakehouse, (d) per-app `pip install`, (e) `dashboard.*` publishing. Design: `docs/design-v0.md`, including its
 "as built" notes.
 
 **Who may do what (ADR 0105, interim while ARCHITECTURE.md item 55 is open):** only owners of the

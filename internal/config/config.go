@@ -76,6 +76,11 @@ type Data struct {
 	// RefreshMax, if set, makes tokens re-mint and gates re-fetch at least this often (a test
 	// knob).
 	RefreshMax time.Duration
+	// File read proxy limits (0 = the dataaccess package defaults: 512 MiB, 5m, 30s, 4).
+	FilesMaxObjectBytes int64
+	FilesObjectTimeout  time.Duration
+	FilesMetaTimeout    time.Duration
+	FilesMaxConcurrent  int
 }
 
 // Lifecycle is the per-app container configuration. Every value comes from the chart.
@@ -162,6 +167,32 @@ func Load() (Config, error) {
 		}
 		if !strings.Contains(d.SidecarImage, "@sha256:") {
 			return Config{}, fmt.Errorf("BOOTH_APP_SIDECAR_IMAGE must be digest-pinned (image@sha256:...), got %q", d.SidecarImage)
+		}
+		if v := os.Getenv("BOOTH_FILES_MAX_OBJECT_BYTES"); v != "" {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 1 {
+				return Config{}, fmt.Errorf("BOOTH_FILES_MAX_OBJECT_BYTES must be a positive integer, got %q", v)
+			}
+			d.FilesMaxObjectBytes = n
+		}
+		for _, dur := range []struct {
+			name string
+			dst  *time.Duration
+		}{{"BOOTH_FILES_OBJECT_TIMEOUT", &d.FilesObjectTimeout}, {"BOOTH_FILES_META_TIMEOUT", &d.FilesMetaTimeout}} {
+			if v := os.Getenv(dur.name); v != "" {
+				n, err := time.ParseDuration(v)
+				if err != nil || n <= 0 {
+					return Config{}, fmt.Errorf("%s must be a positive duration, got %q", dur.name, v)
+				}
+				*dur.dst = n
+			}
+		}
+		if v := os.Getenv("BOOTH_FILES_MAX_CONCURRENT"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 {
+				return Config{}, fmt.Errorf("BOOTH_FILES_MAX_CONCURRENT must be a positive integer, got %q", v)
+			}
+			d.FilesMaxConcurrent = n
 		}
 		if v := os.Getenv("BOOTH_DATA_REFRESH_MAX"); v != "" {
 			n, err := time.ParseDuration(v)

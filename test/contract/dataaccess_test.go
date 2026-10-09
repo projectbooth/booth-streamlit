@@ -111,3 +111,18 @@ func yamlString(t *testing.T, v any) string {
 	}
 	return string(b)
 }
+
+// The file read proxy's limits are chart values that reach the backend (design-data-access item 4).
+func TestChart_FileProxyLimits(t *testing.T) {
+	dep := string(helmTemplate(t, "templates/deployment.yaml", dataOn...))
+	for name, want := range map[string]string{
+		"BOOTH_FILES_MAX_OBJECT_BYTES": `"536870912"`,
+		"BOOTH_FILES_OBJECT_TIMEOUT":   `"5m"`,
+		"BOOTH_FILES_META_TIMEOUT":     `"30s"`,
+		"BOOTH_FILES_MAX_CONCURRENT":   `"4"`,
+	} {
+		if !regexp.MustCompile(name + `\s+value: ` + regexp.QuoteMeta(want)).MatchString(dep) {
+			t.Errorf("%s is not %s", name, want)
+		}
+	}
+}

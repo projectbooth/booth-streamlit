@@ -33,6 +33,8 @@ type Internal struct {
 	Tokens  *Tokens
 	CoreURL string // booth-core, for /api/credentials
 	HTTP    *http.Client
+	// Files, if set, serves the file read proxy (/files/...) on the same port.
+	Files *Files
 }
 
 // Router returns the internal port's handler.
@@ -40,22 +42,28 @@ func (in *Internal) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Post("/internal/token", in.token)
 	r.Post("/internal/broker/api/credentials", in.broker)
+	if in.Files != nil {
+		in.Files.mount(r, in)
+	}
 	return r
 }
 
-func (in *Internal) token(w http.ResponseWriter, r *http.Request) {
+// appFor identifies the calling app by its gate bearer and gets its current token. It writes the
+// response itself when it fails: 401 for an unknown bearer, 403 with the reason while the owner has
+// no access (recording the pause), 503 when core is unreachable.
+func (in *Internal) appFor(w http.ResponseWriter, r *http.Request) (apps.App, Token, bool) {
 	bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || len(bearer) < 32 {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
+		return apps.App{}, Token{}, false
 	}
 	a, err := in.Apps.ByBearer(r.Context(), bearer)
 	// The lookup is by exact value; the constant-time compare is belt and braces against a store
 	// that ever matched loosely.
 	if err != nil || subtle.ConstantTimeCompare([]byte(a.GateBearer), []byte(bearer)) != 1 {
-		log.Printf("internal: token refused from %s: unknown bearer", r.RemoteAddr)
+		log.Printf("internal: %s %s refused from %s: unknown bearer", r.Method, r.URL.Path, r.RemoteAddr)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
+		return apps.App{}, Token{}, false
 	}
 	tok, err := in.Tokens.Get(r.Context(), a)
 	switch {
@@ -64,14 +72,22 @@ func (in *Internal) token(w http.ResponseWriter, r *http.Request) {
 			log.Printf("internal: recording pause for %s: %v", a.ID, perr)
 		}
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "data_access_paused", "reason": err.Error()})
-		return
+		return apps.App{}, Token{}, false
 	case err != nil:
 		log.Printf("internal: minting for %s: %v", a.ID, err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "unavailable"})
-		return
+		return apps.App{}, Token{}, false
 	}
 	if err := in.Apps.DataResumed(r.Context(), a); err != nil {
 		log.Printf("internal: clearing pause for %s: %v", a.ID, err)
+	}
+	return a, tok, true
+}
+
+func (in *Internal) token(w http.ResponseWriter, r *http.Request) {
+	_, tok, ok := in.appFor(w, r)
+	if !ok {
+		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, tok)

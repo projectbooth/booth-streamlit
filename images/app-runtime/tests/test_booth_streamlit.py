@@ -56,8 +56,9 @@ def test_database_url_explains_why_it_cannot_work(monkeypatch):
 def test_the_app_uid_has_a_passwd_entry():
     """libpq needs it to connect with a URL that names no user (DATABASE_URL); runs in the image."""
     import os
+
+    if not hasattr(os, "getuid") or os.getuid() != 65532:  # only meaningful inside the runtime image
+        return
     import pwd
 
-    if os.getuid() != 65532:  # only meaningful inside the runtime image
-        return
     assert pwd.getpwuid(65532).pw_name == "booth"

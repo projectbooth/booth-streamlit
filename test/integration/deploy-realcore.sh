@@ -6,7 +6,13 @@
 # cap of 1 and a 60s idle timeout, and the app runtime image loaded into the cluster.
 #
 #   test/integration/deploy-realcore.sh <booth-core checkout> <core image> <streamlit image> <app-runtime image>
-#     <booth-database checkout> <booth-database image>
+#     <booth-database checkout> <booth-database image> \
+#     <booth-storage checkout> <booth-storage image> <booth-catalog checkout> <booth-catalog image>
+#
+# booth-storage (a filesystem backend root per workspace on an emptyDir) and booth-catalog are the
+# real modules the file read proxy reads through (files-access.sh). Both are told to trust
+# booth-core's workload-token issuer, which is how an app's token is accepted; core's issuer URL is
+# set explicitly so all three agree on it character for character.
 #
 # booth-database (ADR 0081) is the real workspace database the data-access checks read through the
 # credential sidecar; it is installed as release "db" in namespace booth-database, as booth-api's
@@ -22,6 +28,12 @@ image=$3
 runtime_image=$4
 database_dir=$5
 database_image=$6
+storage_dir=$7
+storage_image=$8
+catalog_dir=$9
+catalog_image=${10}
+issuer=http://keycloak.keycloak.svc:8080/realms/booth
+workload_issuer=http://booth-core.booth-system.svc:8080
 ns=booth-streamlit
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 here="$repo/test/integration/realcore"
@@ -48,6 +60,7 @@ kubectl apply -f "$core_dir/charts/booth-core/crds/"
 helm upgrade --install booth-core "$core_dir/charts/booth-core" --namespace booth-system \
   --set oidc.issuerUrl=http://keycloak.keycloak.svc:8080/realms/booth --set oidc.clientId=booth-design \
   --set-string iframeSigningKey="$(openssl rand -hex 32)" \
+  --set workloadIdentity.issuerUrl="$workload_issuer" \
   --set image.repository="${core_image%:*}" --set image.tag="${core_image##*:}" --set image.pullPolicy=Never \
   --wait --timeout 10m
 kubectl -n booth-system rollout status deploy/booth-core --timeout=300s
@@ -56,6 +69,50 @@ echo "--- booth-database from $database_dir ($(git -C "$database_dir" rev-parse 
 kubectl create namespace booth-database --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 helm upgrade --install db "$database_dir/charts/booth-database" -n booth-database \
   --set image.repository="${database_image%:*}" --set image.tag="${database_image##*:}" --set image.pullPolicy=Never \
+  --wait --timeout 10m
+
+echo "--- booth-storage from $storage_dir ($(git -C "$storage_dir" rev-parse --short HEAD 2>/dev/null || echo '?')): a filesystem root per workspace"
+kubectl create namespace booth-storage --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+helm upgrade --install booth-storage "$storage_dir/charts/booth-storage" -n booth-storage \
+  --set oidc.issuerUrl="$issuer" --set oidc.clientId=booth-design \
+  --set oidc.workloadIssuerUrl="$workload_issuer" \
+  --set-json 'filesystem.roots=["/data/{workspace}"]' \
+  --set-json 'filesystem.volumes=[{"name":"data","emptyDir":{}}]' \
+  --set-json 'filesystem.volumeMounts=[{"name":"data","mountPath":"/data"}]' \
+  --set image.repository="${storage_image%:*}" --set image.tag="${storage_image##*:}" --set image.pullPolicy=Never \
+  --wait --timeout 10m
+
+echo "--- booth-catalog from $catalog_dir ($(git -C "$catalog_dir" rev-parse --short HEAD 2>/dev/null || echo '?')), with a stand-in metadata Postgres (as booth-api's realstack test)"
+kubectl create namespace booth-catalog --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+catpw=$(openssl rand -hex 12)
+kubectl -n booth-catalog apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Pod
+metadata: {name: catalog-pg, labels: {app: catalog-pg}}
+spec:
+  containers:
+    - name: postgres
+      image: postgres:16-alpine
+      env:
+        - {name: POSTGRES_USER, value: catalog}
+        - {name: POSTGRES_PASSWORD, value: "$catpw"}
+        - {name: POSTGRES_DB, value: catalog}
+      readinessProbe: {exec: {command: ["pg_isready", "-U", "catalog"]}, periodSeconds: 2}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: catalog-pg}
+spec: {selector: {app: catalog-pg}, ports: [{port: 5432}]}
+EOF
+kubectl -n booth-catalog create secret generic catalog-db \
+  --from-literal=dsn="postgres://catalog:$catpw@catalog-pg.booth-catalog.svc:5432/catalog?sslmode=disable" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n booth-catalog wait --for=condition=Ready pod/catalog-pg --timeout=180s >/dev/null
+helm upgrade --install booth-catalog "$catalog_dir/charts/booth-catalog" -n booth-catalog \
+  --set oidc.issuerUrl="$issuer" --set oidc.clientId=booth-design \
+  --set workloadIdentity.issuerUrl="$workload_issuer" \
+  --set nats.url=nats://booth-core-nats.booth-system.svc:4222 --set postgres.dsnSecret.name=catalog-db \
+  --set image.repository="${catalog_image%:*}" --set image.tag="${catalog_image##*:}" --set image.pullPolicy=Never \
   --wait --timeout 10m
 
 echo "--- booth-streamlit with chart defaults (database and bus credential from core), lifecycle test values"
