@@ -12,6 +12,16 @@ export interface Me {
   canAuthor: boolean;
   /** Whether this install gives apps data access at all (ADR 0104/0107). */
   dataAccess: boolean;
+  /** Whether the editor can list catalog datasets to declare as sources (needs data access). */
+  catalogSources?: boolean;
+}
+
+/** A catalog dataset an owner may declare as an app's source. */
+export interface Dataset {
+  id: string;
+  name: string;
+  description: string;
+  format: string;
 }
 
 export interface App {
@@ -22,6 +32,8 @@ export interface App {
   source?: string;
   /** The app's requirements.txt, installed into its pod on every start. */
   requirements?: string;
+  /** Catalog dataset ids the owner declared: lineage only, never a restriction. */
+  sources?: string[];
   shared: boolean;
   desiredState: "running" | "stopped";
   suspended: boolean;
@@ -42,6 +54,7 @@ export interface AppInput {
   description: string;
   source: string;
   requirements: string;
+  sources: string[];
   shared: boolean;
 }
 
@@ -76,6 +89,8 @@ export const api = {
   start: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/start`),
   takeOwnership: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/take-ownership`),
   stop: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/stop`),
+  /** Catalog datasets readable by the caller (an owner), for declaring sources. */
+  datasets: () => call<{ datasets: Dataset[]; total: number }>("GET", "api/catalog/datasets"),
 };
 
 /** Where an app opens: relative, so it stays under the module's iframe path. */

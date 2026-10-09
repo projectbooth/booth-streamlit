@@ -7,8 +7,10 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/projectbooth/booth-streamlit/internal/apps"
+	"github.com/projectbooth/booth-streamlit/internal/dataaccess"
 	"github.com/projectbooth/booth-streamlit/internal/identity"
 )
 
@@ -32,7 +35,10 @@ type harness struct {
 	h     http.Handler
 	store *apps.MemoryStore
 	svc   *apps.Service
+	v     *identity.Verifier
 }
+
+func (h *harness) verifier() *identity.Verifier { return h.v }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
@@ -47,7 +53,7 @@ func newHarness(t *testing.T) *harness {
 	v := identity.NewWithKeySet(identity.Config{IssuerURL: testIssuer}, &oidc.StaticKeySet{PublicKeys: []crypto.PublicKey{&key.PublicKey}})
 	store := apps.NewMemoryStore()
 	svc := apps.NewService(store, 0)
-	return &harness{t: t, jws: jws, store: store, svc: svc, h: NewRouter(Deps{DB: fakeDB{}, Verifier: v, Apps: svc})}
+	return &harness{t: t, jws: jws, store: store, svc: svc, v: v, h: NewRouter(Deps{DB: fakeDB{}, Verifier: v, Apps: svc})}
 }
 
 // as returns headers for a person with role in workspace, as core's iframe proxy sends them.
@@ -165,7 +171,7 @@ func TestAppAPI_OnlyWorkspaceOwnersWrite(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s app was deleted by a refused caller: %v", app.a.Name, err)
 				}
-				if after != app.a {
+				if !reflect.DeepEqual(after, app.a) {
 					t.Errorf("%s app changed after refused writes:\n got %+v\nwant %+v", app.a.Name, after, app.a)
 				}
 			}
@@ -367,5 +373,43 @@ func TestAppAPI_TakeOwnership(t *testing.T) {
 	c := changes[0].(map[string]any)
 	if c["previousOwner"] != ownerSub || c["newOwner"] != "owner-2" || c["reason"] != "owner gone" || c["appId"] != shared.ID {
 		t.Errorf("recorded change %v", c)
+	}
+}
+
+type fakeLister struct {
+	err    error
+	called *identity.Caller
+}
+
+func (f *fakeLister) List(_ context.Context, c identity.Caller, q string) ([]dataaccess.DatasetSummary, int, error) {
+	f.called = &c
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	return []dataaccess.DatasetSummary{{ID: "ds-1", Name: "Orders", Format: "file"}}, 1, nil
+}
+
+// Declared sources (plan item 6): owners list catalog datasets read as themselves; editors and
+// viewers can't; without data access there is no list; a refused mint says why.
+func TestCatalogDatasets(t *testing.T) {
+	h := newHarness(t)
+	lister := &fakeLister{}
+	h.h = NewRouter(Deps{DB: fakeDB{}, Verifier: h.verifier(), Apps: h.svc, Datasets: lister})
+	code, body := h.do("GET", "/api/catalog/datasets", h.as(ownerSub, "acme", identity.RoleOwner), nil)
+	if code != 200 || body["total"] != float64(1) || lister.called == nil || lister.called.Subject != ownerSub || lister.called.Workspace != "acme" {
+		t.Fatalf("owner: %d %v (listed as %+v)", code, body, lister.called)
+	}
+	for _, role := range []identity.Role{identity.RoleEditor, identity.RoleViewer} {
+		if code, _ := h.do("GET", "/api/catalog/datasets", h.as("someone", "acme", role), nil); code != 403 {
+			t.Errorf("%s: %d, want 403", role, code)
+		}
+	}
+	lister.err = dataaccess.ErrOwnerNoAccess
+	if code, body := h.do("GET", "/api/catalog/datasets", h.as(ownerSub, "acme", identity.RoleOwner), nil); code != 403 || !strings.Contains(fmt.Sprint(body["error"]), "no longer has access") {
+		t.Errorf("refused mint: %d %v", code, body)
+	}
+	h.h = NewRouter(Deps{DB: fakeDB{}, Verifier: h.verifier(), Apps: h.svc})
+	if code, _ := h.do("GET", "/api/catalog/datasets", h.as(ownerSub, "acme", identity.RoleOwner), nil); code != 404 {
+		t.Errorf("without data access: %d, want 404", code)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -29,8 +30,8 @@ func stores(t *testing.T) map[string]Store {
 	}
 	t.Cleanup(pool.Close)
 	// A clean slate per test run; migrations re-apply.
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS app_ownership_changes, apps; DELETE FROM streamlit_schema_migrations WHERE component = 'apps'`); err != nil {
-		if _, err2 := pool.Exec(ctx, `DROP TABLE IF EXISTS app_ownership_changes, apps`); err2 != nil {
+	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS app_events_outbox, app_ownership_changes, apps; DELETE FROM streamlit_schema_migrations WHERE component = 'apps'`); err != nil {
+		if _, err2 := pool.Exec(ctx, `DROP TABLE IF EXISTS app_events_outbox, app_ownership_changes, apps`); err2 != nil {
 			t.Fatal(err2)
 		}
 	}
@@ -48,7 +49,7 @@ func stores(t *testing.T) map[string]Store {
 
 func app(id, ws, name string, shared bool) App {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
-	return App{ID: id, Workspace: ws, Name: name, Source: "src-" + id, Shared: shared, DesiredState: Stopped, GateBearer: "bearer-" + id,
+	return App{ID: id, Workspace: ws, Name: name, Source: "src-" + id, Sources: []string{}, Shared: shared, DesiredState: Stopped, GateBearer: "bearer-" + id,
 		CreatedBy: "o", CreatedAt: now, UpdatedBy: "o", UpdatedAt: now}
 }
 
@@ -91,7 +92,7 @@ func TestStores(t *testing.T) {
 			}
 
 			got, err := s.Get(ctx, "acme", "a1")
-			if err != nil || got != app("a1", "acme", "beta", false) {
+			if err != nil || !reflect.DeepEqual(got, app("a1", "acme", "beta", false)) {
 				t.Errorf("Get = %+v %v", got, err)
 			}
 			// Workspace scoping: another workspace's id is not found, for every operation.
@@ -114,7 +115,7 @@ func TestStores(t *testing.T) {
 			if err := s.Update(ctx, upd); err != nil {
 				t.Fatal(err)
 			}
-			if after, _ := s.Get(ctx, "acme", "a1"); after != upd {
+			if after, _ := s.Get(ctx, "acme", "a1"); !reflect.DeepEqual(after, upd) {
 				t.Errorf("after Update: %+v, want %+v", after, upd)
 			}
 			if r, err := s.SetDesiredState(ctx, "acme", "a1", Running, "o3"); err != nil || r.DesiredState != Running || r.UpdatedBy != "o3" {

@@ -38,6 +38,12 @@ type Store interface {
 	OwnershipChanges(ctx context.Context, workspace, id string) ([]OwnershipChange, error)
 	Delete(ctx context.Context, workspace, id string) error
 	Ping(ctx context.Context) error
+
+	// Create, Update, Delete and TakeOwnership also write the change's dashboard events
+	// (dashboardEvents) to the outbox, in the same transaction. The drainer reads them back:
+	PublishNext(ctx context.Context, maxAttempts int, publish func(OutboxRow) error) (found bool, err error)
+	OutboxStats(ctx context.Context) (OutboxStats, error)
+	PruneOutbox(ctx context.Context, olderThan time.Duration) error
 }
 
 // OwnershipChange is one recorded take-over (ADR 0107 item 7).
@@ -55,7 +61,94 @@ type MemoryStore struct {
 	mu      sync.Mutex
 	apps    map[string]App // by id
 	changes []OwnershipChange
+	outbox  []memRow
+	nextID  int64
+	// Now is the outbox's clock (the database clock in Postgres); tests may set it.
+	Now func() time.Time
 }
+
+type memRow struct {
+	OutboxRow
+	published   bool
+	failed      bool
+	nextAttempt time.Time
+	lastError   string
+}
+
+func (m *MemoryStore) now() time.Time {
+	if m.Now != nil {
+		return m.Now()
+	}
+	return time.Now()
+}
+
+// writeEvents must be called with m.mu held.
+func (m *MemoryStore) writeEvents(evs []DashboardEvent) {
+	for _, e := range evs {
+		m.nextID++
+		t := m.now()
+		for _, r := range m.outbox { // strictly after this app's previous event, as in Postgres
+			if r.Workspace == e.Workspace && r.AppID == e.AppID && !t.After(r.CreatedAt) {
+				t = r.CreatedAt.Add(time.Microsecond)
+			}
+		}
+		m.outbox = append(m.outbox, memRow{OutboxRow: OutboxRow{ID: m.nextID, Workspace: e.Workspace, AppID: e.AppID, Type: e.Type, Data: e.Data, CreatedAt: t}, nextAttempt: m.now()})
+	}
+}
+
+// Outbox returns every row written so far, for tests.
+func (m *MemoryStore) Outbox() []OutboxRow {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]OutboxRow, 0, len(m.outbox))
+	for _, r := range m.outbox {
+		out = append(out, r.OutboxRow)
+	}
+	return out
+}
+
+func (m *MemoryStore) PublishNext(_ context.Context, maxAttempts int, publish func(OutboxRow) error) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	for i := range m.outbox {
+		r := &m.outbox[i]
+		if r.published || r.failed || r.nextAttempt.After(now) {
+			continue
+		}
+		r.Attempts++
+		if err := publish(r.OutboxRow); err != nil {
+			r.lastError = err.Error()
+			r.failed = r.Attempts >= maxAttempts
+			backoff := time.Duration(1<<min(r.Attempts, 8)) * time.Second
+			r.nextAttempt = now.Add(min(backoff, 5*time.Minute))
+			return true, nil
+		}
+		r.published, r.lastError = true, ""
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m *MemoryStore) OutboxStats(context.Context) (OutboxStats, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var st OutboxStats
+	for _, r := range m.outbox {
+		switch {
+		case r.failed:
+			st.Failed++
+		case !r.published:
+			st.Pending++
+		}
+		if !r.published && r.lastError != "" {
+			st.LastError = r.lastError
+		}
+	}
+	return st, nil
+}
+
+func (m *MemoryStore) PruneOutbox(context.Context, time.Duration) error { return nil }
 
 // NewMemoryStore returns an empty MemoryStore.
 func NewMemoryStore() *MemoryStore { return &MemoryStore{apps: map[string]App{}} }
@@ -93,7 +186,11 @@ func (m *MemoryStore) Get(_ context.Context, workspace, id string) (App, error) 
 func (m *MemoryStore) Create(_ context.Context, a App) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if a.Sources == nil {
+		a.Sources = []string{}
+	}
 	m.apps[a.ID] = a
+	m.writeEvents(dashboardEvents(nil, &a))
 	return nil
 }
 
@@ -104,9 +201,14 @@ func (m *MemoryStore) Update(_ context.Context, a App) error {
 	if !ok || cur.Workspace != a.Workspace {
 		return ErrNotFound
 	}
-	cur.Name, cur.Description, cur.Source, cur.Requirements, cur.Shared = a.Name, a.Description, a.Source, a.Requirements, a.Shared
+	before := cur
+	if a.Sources == nil {
+		a.Sources = []string{}
+	}
+	cur.Name, cur.Description, cur.Source, cur.Requirements, cur.Sources, cur.Shared = a.Name, a.Description, a.Source, a.Requirements, append([]string{}, a.Sources...), a.Shared
 	cur.UpdatedBy, cur.UpdatedAt = a.UpdatedBy, a.UpdatedAt
 	m.apps[a.ID] = cur
+	m.writeEvents(dashboardEvents(&before, &cur))
 	return nil
 }
 
@@ -153,6 +255,7 @@ func (m *MemoryStore) Delete(_ context.Context, workspace, id string) error {
 		return ErrNotFound
 	}
 	delete(m.apps, id)
+	m.writeEvents(dashboardEvents(&cur, nil))
 	return nil
 }
 
@@ -198,9 +301,10 @@ func (m *MemoryStore) TakeOwnership(_ context.Context, workspace, id, newOwner, 
 	if !ok || cur.Workspace != workspace {
 		return "", ErrNotFound
 	}
-	prev := cur.Owner
+	prev, before := cur.Owner, cur
 	cur.Owner, cur.DataPausedReason, cur.DataPausedAt = newOwner, "", nil
 	m.apps[id] = cur
+	m.writeEvents(dashboardEvents(&before, &cur))
 	m.changes = append(m.changes, OwnershipChange{AppID: id, Workspace: workspace, PreviousOwner: prev, NewOwner: newOwner, Reason: reason, At: at})
 	return prev, nil
 }

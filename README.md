@@ -27,7 +27,9 @@ scoped to the workspace's warehouse, with `booth_streamlit.pyarrow_fs()` and `du
 (`dataAccess.lakehouse.enabled`; the S3 keys it writes are readable by app code, as ADR 0107 accepts).
 Off unless `dataAccess.enabled`. **(d)** per-app packages: an optional `requirements.txt`, installed on
 every start by an init container that holds no token, bearer or credentials (`apps.pip`); DuckDB
-is in the runtime image. Not built yet: (e) `dashboard.*` publishing. Design: `docs/design-v0.md`, including its
+is in the runtime image; **(e)** lineage and events: owners declare catalog datasets as an app's
+sources (lineage only), and shared apps are published to booth-catalog as `dashboard.*` events
+through a transactional outbox, at least once. Design: `docs/design-v0.md`, including its
 "as built" notes.
 
 **Who may do what (ADR 0105, interim while ARCHITECTURE.md item 55 is open):** only owners of the

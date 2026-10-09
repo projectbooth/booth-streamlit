@@ -150,6 +150,9 @@ jobs:
       - name: "Per-app packages (ADR 0107): install from the in-cluster test index, timings, mounts, scanner, bad requirement, hung install, closed egress"
         run: test/integration/pip-access.sh
 
+      - name: "Lineage and events (ADR 0046): dashboards in the real booth-catalog, edit, unshare, NATS stopped and restarted"
+        run: test/integration/events-access.sh
+
       - name: Dump state on failure
         if: failure()
         run: |
@@ -174,4 +177,6 @@ jobs:
           kubectl -n booth-lakehouse logs deploy/booth-lakehouse-lakekeeper --tail=40 || true
           kubectl -n booth-streamlit logs -l booth.projectbooth.io/component=app -c pip --tail=60 || true
           kubectl -n booth-pypi logs deploy/pypi --tail=40 || true
+          kubectl -n booth-system get pods -l app.kubernetes.io/name=nats || true
+          kubectl -n booth-catalog logs deploy/booth-catalog --tail=80 | grep -i -E "dashboard|event|nats" || true
           kubectl -n booth-system logs deploy/booth-core --tail=200 | grep -E "workload identity|credential" || true

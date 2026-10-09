@@ -30,9 +30,11 @@ RUN pip install -r /opt/booth/requirements.txt
 # DuckDB's httpfs and aws extensions, matching the pinned DuckDB, into a directory that is part of
 # the image (HOME is /tmp at runtime, an empty volume). booth_streamlit.duckdb_secret() loads them
 # from here, so reading the lakehouse needs no download at runtime. They come from DuckDB's
-# extension repository at build time.
+# extension repository at build time, pinned by sha256 (install_duckdb_extensions.py).
 ENV BOOTH_DUCKDB_EXTENSIONS=/opt/booth/duckdb
-RUN python -c "import duckdb; c = duckdb.connect(); c.execute(\"SET extension_directory = '/opt/booth/duckdb'\"); c.execute('INSTALL httpfs; INSTALL aws; LOAD httpfs; LOAD aws')" \
+COPY images/app-runtime/install_duckdb_extensions.py /tmp/install_duckdb_extensions.py
+RUN python /tmp/install_duckdb_extensions.py /opt/booth/duckdb \
+ && rm /tmp/install_duckdb_extensions.py \
  && chmod -R a+rX /opt/booth/duckdb
 COPY images/app-runtime/booth_streamlit /opt/booth/lib/booth_streamlit
 ENV PYTHONPATH=/opt/booth/lib

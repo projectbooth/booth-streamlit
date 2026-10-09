@@ -336,10 +336,45 @@ Built as item 5 describes. Details the plan didn't spell out:
   NetworkPolicy is per pod, so app code can reach that index too.
 - **DuckDB is in the runtime image now** (1.5.6), with its `httpfs` and `aws` extensions installed
   at build time into `/opt/booth/duckdb`. `duckdb_secret()` loads them from there, so the lakehouse
-  reads through DuckDB with no download at runtime, closed egress included. The extensions come
-  from DuckDB's repository at image build time and aren't digest-pinned; the DuckDB wheel is.
+  reads through DuckDB with no download at runtime, closed egress included. Since step e the
+  extensions are **pinned by sha256** (`images/app-runtime/install_duckdb_extensions.py`, amd64 and
+  arm64): the build downloads each from DuckDB's repository, refuses a file whose hash differs, and
+  installs from the verified copy (DuckDB also checks each extension's signature). Bumping DuckDB
+  means recording the new hashes.
 - **Idle shutdown counts a viewer waiting on the starting page as activity** (a change to step 3's
   rule, found by real-core run 37954610250). Before, only requests to a running app counted, so an
   app whose start outlasted the idle timeout (a long install) was suspended mid-start with the
   viewer still there. A failed or stopped app's page still doesn't count, so an app whose install
   keeps failing goes idle and stops retrying.
+
+## As built: step e, lineage and events
+
+Built as item 6 describes. Details the plan didn't spell out:
+
+- **Declared sources** are catalog dataset ids on the app (`sources`, at most 50). The editor lists
+  the datasets through `GET /api/catalog/datasets`, which mints a token for the signed-in owner
+  (capped at viewer, subject `streamlit:<workspace>:sources`) and asks booth-catalog through core's
+  gateway, so it shows what that owner can read. It needs data access (the minting credential).
+  The editor says in plain words that sources tell the catalog what the app reads and don't limit
+  what it can read.
+- **Which change publishes what**, for shared apps only: sharing (or creating shared) publishes
+  `dashboard.created`; a change to the name, description, owner (take ownership) or sources of a
+  shared app publishes `updated`; a code-only or requirements-only edit publishes nothing;
+  unsharing or deleting publishes `deleted`. Payload as ADR 0046: `dashboardId` (the app id), `name`,
+  `description`, `owner` (the owner's subject), `path: /streamlit`, `lineageComplete: false`,
+  `sources: [{type: dataset, datasetId}]` (always present, so clearing sources clears lineage).
+- **The outbox** (`app_events_outbox`): each change's events are inserted in the change's own
+  transaction, computed from the row as locked there. `created_at` is `publishedAt`, from the
+  database clock, and is kept strictly after that app's previous event even within one clock tick,
+  so booth-catalog's last-writer-wins never sees a tie.
+- **The drainer** publishes due rows oldest first with JetStream acknowledgements, marking each
+  published only after its ack, with a JetStream message id for de-duplication. It attempts nothing
+  while the bus is disconnected, so an outage of any length costs no attempts, and the rows survive
+  a backend restart in Postgres. A row that fails while connected backs off (2s doubling to 5
+  minutes) and after 20 attempts is marked failed, logged, and left in the table; `/healthz` reports
+  `eventsPending`, `eventsFailed` and the last error, and turns `degraded` while any row has failed.
+  A failed row never holds up the rows after it. Published rows are pruned after 7 days.
+- **No Role or NetworkPolicy change.** The bus credential is the `booth-event-bus-credentials`
+  Secret core already writes for the manifest's `events: {publish: [dashboard.*]}`; core's grant
+  for a publisher includes the JetStream calls an acknowledged publish needs. The backend's
+  NetworkPolicy is ingress-only, so its route to NATS is unchanged.
