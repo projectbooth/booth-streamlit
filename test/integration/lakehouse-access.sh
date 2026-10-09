@@ -123,7 +123,9 @@ echo "$scan"
 [ "$(echo "$scan" | json 'd.found.bearer.length')" = 0 ] || fail "user code can read the gate bearer: $(echo "$scan" | json 'd.found.bearer')"
 [ "$(echo "$scan" | json 'd.found.sa_token')" = false ] || fail "user code has a service-account token"
 [ "$(echo "$scan" | json 'd.counts.ports.includes(8091)')" = true ] || fail "the scanner did not probe the s3 sidecar's health port"
-[ "$(echo "$scan" | json 'd.found.s3_keys.includes("/var/run/booth/s3/credentials")')" = true ] \
+# The scanner walks without following symlinks, and /var/run is a symlink to /run in the image, so
+# the keys file is reported as /run/booth/s3/credentials (Integration run 37928618395).
+[ "$(echo "$scan" | json 'd.found.s3_keys.some(p => p === "/var/run/booth/s3/credentials" || p === "/run/booth/s3/credentials")')" = true ] \
   || fail "the scanner did not see the S3 keys file it should be able to read (is it scanning?)"
 echo "expected, not a finding: the S3 keys are readable at $(echo "$scan" | json 'd.found.s3_keys.join(", ")')"
 
