@@ -19,3 +19,8 @@ web/coverage/
 .env
 .env.*
 !.env.example
+
+# Python (the app runtime's helper, its tests, the integration scanner)
+__pycache__/
+*.pyc
+.pytest_cache/
