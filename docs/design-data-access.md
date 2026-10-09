@@ -263,3 +263,37 @@ Built as item 4 describes. Details the plan didn't spell out:
   workload-token issuer (`oidc.workloadIssuerUrl` and `workloadIdentity.issuerUrl`), or they refuse
   every app's token.
 
+
+## As built: step c, the lakehouse
+
+Built as item 3 describes. Details the plan didn't spell out:
+
+- **Confirmed against the pinned binary, not the docs.** The sidecar image was pulled by digest
+  (`sha256:6a0a795e…`) and its `/credential-sidecar` read directly. It has `--credentials-file` and
+  `--health-listen` (default `127.0.0.1:8080`, so it is moved to `127.0.0.1:8091`), the s3 writer
+  (`<file>` and `<file>.config`, `addressing_style` nested under `s3 =`), and the "could not obtain an
+  initial … lease" exit. Its flag help matches booth-core `8f0c6b4`'s source, which is what
+  booth-notebooks' ADR 0009 records the digest was built from. Real-core runs it with these flags.
+- **The sidecar runs as the Streamlit container's uid (65532),** because it writes both files `0600`
+  (contracts/credential-sidecar.md). Real-core checks the file's mode and owner from user code.
+- **When the warehouse is looked up.** The backend calls booth-lakehouse `GET /api/warehouse` through
+  core's gateway with the app's own token when a pod is about to start (no Deployment yet, or scaled
+  to zero), and keeps the answer, in a Deployment annotation, for that pod's life. A lookup on every
+  reconcile would roll a running app whenever booth-lakehouse was briefly unreachable. So a warehouse
+  created while an app runs reaches it at its next start (stop and start, or idle and wake), as in
+  booth-notebooks. A roll while running (an edit, a pause) keeps the warehouse it had.
+- **Any lookup failure means no s3 sidecar, and the app starts anyway:** a 404 (no warehouse, or no
+  booth-lakehouse), a 5xx, an unreadable answer, or a refused mint.
+- **booth-lakehouse needed no change.** It trusts core's workload issuer by default (the `issuer` in
+  `booth-workload-minting-credentials`, with its `workloadIdentity.enabled`), and reads the role from
+  the token's groups claim, which core's minted tokens carry.
+- **App code also gets `BOOTH_WAREHOUSE_ROOT`** (`s3://bucket/prefix`, booth-lakehouse's
+  `storageRoot`), so it knows where the files are: `booth_streamlit.warehouse_root()`.
+- **Egress:** app code itself connects to the object store (unlike Postgres, where only the sidecar
+  does). For one in the cluster, `dataAccess.lakehouse.egress` adds a rule by selectors; both are
+  required, since an empty namespace selector would match every namespace. An external store is
+  reached through `apps.egress.mode=open`.
+- **The S3 keys are readable by app code** (item 8.3, accepted): the scanner reports them as expected,
+  and claims only that the workload token and the bearer are unreadable. Keys copied out before a pause
+  keep working until their lease expires; real-core shows this, informationally.
+- **Quota:** a second sidecar per pod raises the defaults to `limits.cpu: 9` and `limits.memory: 8Gi`.

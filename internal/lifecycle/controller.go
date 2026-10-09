@@ -66,6 +66,10 @@ type DataConfig struct {
 	Database bool
 	// RefreshMax caps the gate's refresh interval (a test knob; empty = two thirds of a token's life).
 	RefreshMax string
+	// Lakehouse, if set, looks up the app's workspace warehouse (booth-lakehouse, as the app's
+	// owner). Found: the pod gets the s3 sidecar for it. nil (no warehouse) or an error: no s3
+	// sidecar, and the app starts anyway.
+	Lakehouse func(ctx context.Context, a apps.App) (*Warehouse, error)
 }
 
 // State is an app's observed state, as the API and the proxy report it.
@@ -313,7 +317,7 @@ func (c *Controller) store(gens map[string]uint64, statuses map[string]Status, w
 // ensure makes one app's objects match, returning its Deployment as it now stands.
 func (c *Controller) ensure(ctx context.Context, a apps.App, cur *appsv1.Deployment) (*appsv1.Deployment, error) {
 	ns := c.cfg.Namespace
-	want := deployment(c.cfg, a)
+	want := deployment(c.cfg, a, c.warehouse(ctx, a, cur))
 	want.OwnerReferences = []metav1.OwnerReference{ownerRef(c.cfg.Owner)}
 
 	var d *appsv1.Deployment
@@ -353,6 +357,30 @@ func (c *Controller) ensure(ctx context.Context, a apps.App, cur *appsv1.Deploym
 		return nil, fmt.Errorf("service: %w", err)
 	}
 	return d, nil
+}
+
+// warehouse decides which warehouse, if any, an app's pod gets an s3 sidecar for. It is looked up
+// only when a pod is about to start (no Deployment yet, or one scaled to zero) and then kept for
+// that pod's life, as booth-notebooks does at spawn: a lookup on every reconcile would roll a
+// running app whenever booth-lakehouse was briefly unreachable. So a warehouse created while an
+// app runs reaches it at its next start. A pod that rolls while running (an edit, a pause) keeps
+// the warehouse it had.
+func (c *Controller) warehouse(ctx context.Context, a apps.App, cur *appsv1.Deployment) *Warehouse {
+	if c.cfg.Data == nil || c.cfg.Data.Lakehouse == nil {
+		return nil
+	}
+	starting := cur == nil || cur.Spec.Replicas == nil || *cur.Spec.Replicas == 0
+	if !apps.Active(a) || !starting {
+		return warehouseOf(cur)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	wh, err := c.cfg.Data.Lakehouse(ctx, a)
+	if err != nil {
+		log.Printf("lifecycle: app %s starts without lakehouse access: %v", a.ID, err)
+		return nil
+	}
+	return wh
 }
 
 func (c *Controller) ensureConfigMap(ctx context.Context, want *corev1.ConfigMap) error {

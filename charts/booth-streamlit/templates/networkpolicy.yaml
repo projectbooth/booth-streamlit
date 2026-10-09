@@ -58,6 +58,22 @@ spec:
       ports:
         - {protocol: TCP, port: {{ .Values.dataAccess.database.egress.port }}}
     {{- end }}
+    {{- if and .Values.dataAccess.lakehouse.enabled .Values.dataAccess.lakehouse.egress.podSelector }}
+    {{- if not .Values.dataAccess.lakehouse.egress.namespaceSelector }}
+    {{- fail "dataAccess.lakehouse.egress.namespaceSelector is required with its podSelector (empty would match every namespace)" }}
+    {{- end }}
+    # The object store the lakehouse warehouse lives on, when it runs in the cluster (e.g. MinIO).
+    # Unlike Postgres, app code itself connects here, with the s3 sidecar's read-only keys.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.dataAccess.lakehouse.egress.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.dataAccess.lakehouse.egress.podSelector | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.dataAccess.lakehouse.egress.port }}}
+    {{- end }}
     {{- end }}
     {{- if eq .Values.apps.egress.mode "open" }}
     - to:

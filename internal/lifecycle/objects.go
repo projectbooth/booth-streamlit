@@ -28,6 +28,9 @@ const (
 
 	annoSourceHash = "booth.projectbooth.io/source-hash"
 	annoDataEpoch  = "booth.projectbooth.io/data-epoch"
+	// annoWarehouse, on the Deployment, is the lakehouse warehouse its pod's s3 sidecar is scoped to
+	// (JSON), or empty for none. Looked up when the app starts and kept for that pod's life.
+	annoWarehouse = "booth.projectbooth.io/warehouse"
 
 	tokenDir     = "/var/run/booth/token"
 	tokenFile    = tokenDir + "/token"
@@ -35,11 +38,32 @@ const (
 	pgListen     = "127.0.0.1:5432"
 	annoSpecHash = "booth.projectbooth.io/spec-hash"
 
+	// The s3 sidecar's output: AWS's two standard files, the keys in s3CredFile and the endpoint
+	// in s3CredFile + ".config" (contracts/credential-sidecar.md). Off the default health port
+	// 8080, which is the gate's.
+	s3Dir          = "/var/run/booth/s3"
+	s3CredFile     = s3Dir + "/credentials"
+	s3HealthListen = "127.0.0.1:8091"
+
+	// appUID is the uid every container of an app pod runs as, the Streamlit container's included.
+	// The s3 sidecar writes its files 0600, so it must run as the uid that reads them (the
+	// contract's requirement); the image's own user is the same 65532, set here explicitly.
+	appUID = int64(65532)
+
 	gatePort      = 8080
 	streamlitPort = 8501
 	bearerKey     = "bearer"
 	sourceKey     = "app.py"
 )
+
+// Warehouse is a workspace's lakehouse warehouse, as booth-lakehouse's GET /api/warehouse answers
+// it: the s3 sidecar's scope is {BackendID, Path}; StorageRoot (s3://bucket/prefix) tells app code
+// where the warehouse's files are.
+type Warehouse struct {
+	BackendID   string `json:"backendId"`
+	Path        string `json:"path"`
+	StorageRoot string `json:"storageRoot"`
+}
 
 // Selector matches every object the lifecycle owns.
 var Selector = LabelComponent + "=" + componentApp
@@ -101,11 +125,12 @@ func service(ns string, a apps.App) *corev1.Service {
 }
 
 // deployment builds an app's Deployment: Streamlit on loopback plus the gate as its only network
-// entry point (design note (a)/(b)). Replicas is 1 only while the app is Active.
-func deployment(cfg Config, a apps.App) *appsv1.Deployment {
+// entry point (design note (a)/(b)). Replicas is 1 only while the app is Active. wh, if not nil,
+// adds the s3 sidecar for that warehouse (with data access on).
+func deployment(cfg Config, a apps.App, wh *Warehouse) *appsv1.Deployment {
 	f := false
 	t := true
-	uid := int64(65532)
+	uid := appUID
 	replicas := int32(0)
 	if apps.Active(a) {
 		replicas = 1
@@ -181,8 +206,14 @@ func deployment(cfg Config, a apps.App) *appsv1.Deployment {
 			},
 		},
 	}
+	whAnno := ""
 	if cfg.Data != nil {
 		addDataAccess(cfg, a, &tpl.Spec, readOnly)
+		if wh != nil {
+			addLakehouse(cfg, a, *wh, &tpl.Spec, readOnly)
+			b, _ := json.Marshal(wh)
+			whAnno = string(b)
+		}
 	}
 	d := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: deploymentName(a.ID), Namespace: cfg.Namespace, Labels: labels(a)},
@@ -195,8 +226,71 @@ func deployment(cfg Config, a apps.App) *appsv1.Deployment {
 			Template: tpl,
 		},
 	}
-	d.Annotations = map[string]string{annoSpecHash: hashOf(d.Spec)}
+	d.Annotations = map[string]string{annoSpecHash: hashOf(d.Spec), annoWarehouse: whAnno}
 	return d
+}
+
+// warehouseOf reads back the warehouse a Deployment was built with (nil for none).
+func warehouseOf(d *appsv1.Deployment) *Warehouse {
+	if d == nil || d.Annotations[annoWarehouse] == "" {
+		return nil
+	}
+	var wh Warehouse
+	if json.Unmarshal([]byte(d.Annotations[annoWarehouse]), &wh) != nil || wh.BackendID == "" {
+		return nil
+	}
+	return &wh
+}
+
+// addLakehouse adds the s3 credential sidecar for the workspace's warehouse (ADR 0107;
+// docs/design-data-access.md item 3). Unlike the token, the keys it writes ARE readable by user
+// code: that is how ADR 0095's s3 mode works (any S3 client reads the standard AWS files), and
+// ADR 0107 accepts it (item 5 of the plan's section 8). The lease is read only, so the keys can
+// read the warehouse's prefix and nothing else, and expire with the lease.
+func addLakehouse(cfg Config, a apps.App, wh Warehouse, spec *corev1.PodSpec, sc corev1.SecurityContext) {
+	data := cfg.Data
+	mem := resource.MustParse("1Mi")
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name:         "s3",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: &mem}},
+	})
+	for i := range spec.Containers {
+		c := &spec.Containers[i]
+		if c.Name != "streamlit" {
+			continue
+		}
+		c.Env = append(c.Env,
+			// Read by every AWS SDK; booth_streamlit.pyarrow_fs() and duckdb_secret() pass the
+			// endpoint on to the engines that ignore the config file (ADR 0095 Finding 3).
+			corev1.EnvVar{Name: "AWS_SHARED_CREDENTIALS_FILE", Value: s3CredFile},
+			corev1.EnvVar{Name: "AWS_CONFIG_FILE", Value: s3CredFile + ".config"},
+			corev1.EnvVar{Name: "BOOTH_WAREHOUSE_ROOT", Value: wh.StorageRoot},
+		)
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "s3", MountPath: s3Dir, ReadOnly: true})
+	}
+	uid := appUID
+	s3SC := sc
+	s3SC.RunAsUser = &uid
+	s3SC.RunAsGroup = &uid
+	scope, _ := json.Marshal(map[string]string{"backendId": wh.BackendID, "path": wh.Path})
+	spec.Containers = append(spec.Containers, corev1.Container{
+		Name:            "s3-sidecar",
+		Image:           data.SidecarImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Args: []string{
+			"--kind=s3", "--access=read",
+			"--scope=" + string(scope), "--workspace=" + a.Workspace,
+			"--token-file=" + tokenFile,
+			"--credentials-file=" + s3CredFile, "--health-listen=" + s3HealthListen,
+			"--core-url=" + data.BrokerURL,
+		},
+		Resources:       data.SidecarResources,
+		SecurityContext: &s3SC,
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "token", MountPath: tokenDir, ReadOnly: true},
+			{Name: "s3", MountPath: s3Dir},
+		},
+	})
 }
 
 func int32Ptr(v int32) *int32 { return &v }
@@ -240,7 +334,7 @@ func addDataAccess(cfg Config, a apps.App, spec *corev1.PodSpec, sc corev1.Secur
 		}
 	}
 	if data.Database {
-		uid := int64(65532)
+		uid := appUID
 		pgSC := sc
 		pgSC.RunAsUser = &uid
 		scope, _ := json.Marshal(map[string]string{"workspace": a.Workspace})

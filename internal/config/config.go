@@ -73,6 +73,9 @@ type Data struct {
 	SidecarResources string
 	// Database adds the postgres sidecar to app pods (booth-database installed).
 	Database bool
+	// Lakehouse looks up each app's workspace warehouse in booth-lakehouse at start and, when there
+	// is one, adds the s3 sidecar for it (booth-lakehouse installed).
+	Lakehouse bool
 	// RefreshMax, if set, makes tokens re-mint and gates re-fetch at least this often (a test
 	// knob).
 	RefreshMax time.Duration
@@ -157,6 +160,7 @@ func Load() (Config, error) {
 		d.SidecarImage = os.Getenv("BOOTH_APP_SIDECAR_IMAGE")
 		d.SidecarResources = os.Getenv("BOOTH_APP_SIDECAR_RESOURCES")
 		d.Database = os.Getenv("BOOTH_APP_DATABASE") == "true"
+		d.Lakehouse = os.Getenv("BOOTH_APP_LAKEHOUSE") == "true"
 		for _, req := range []struct{ name, val string }{
 			{"BOOTH_WORKLOAD_MINT_URL", d.MintURL}, {"BOOTH_WORKLOAD_MINT_CREDENTIAL", d.MintCredential},
 			{"BOOTH_CORE_URL", d.CoreURL}, {"BOOTH_INTERNAL_URL", d.InternalURL}, {"BOOTH_APP_SIDECAR_IMAGE", d.SidecarImage},

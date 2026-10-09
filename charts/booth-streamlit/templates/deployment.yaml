@@ -94,6 +94,8 @@ spec:
               value: {{ .Values.dataAccess.sidecar.resources | toJson | quote }}
             - name: BOOTH_APP_DATABASE
               value: {{ .Values.dataAccess.database.enabled | quote }}
+            - name: BOOTH_APP_LAKEHOUSE
+              value: {{ .Values.dataAccess.lakehouse.enabled | quote }}
             - name: BOOTH_FILES_MAX_OBJECT_BYTES
               value: {{ .Values.dataAccess.files.maxObjectBytes | int64 | quote }}
             - name: BOOTH_FILES_OBJECT_TIMEOUT

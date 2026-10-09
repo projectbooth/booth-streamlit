@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -535,6 +536,173 @@ func TestDeployment_NoDataAccessByDefault(t *testing.T) {
 		for _, e := range c.Env {
 			if e.Name == "DATABASE_URL" || e.Name == "BOOTH_GATE_TOKEN_URL" {
 				t.Errorf("%s set without data access", e.Name)
+			}
+		}
+	}
+}
+
+// lakeRig is dataRig with booth-lakehouse: the lookup answers wh (or err) and counts its calls.
+func lakeRig(t *testing.T, wh *Warehouse, err error) (*rig, *int) {
+	t.Helper()
+	r := dataRig(t)
+	calls := 0
+	r.c.cfg.Data.Lakehouse = func(context.Context, apps.App) (*Warehouse, error) {
+		calls++
+		return wh, err
+	}
+	return r, &calls
+}
+
+var acmeWarehouse = &Warehouse{BackendID: "lake", Path: "acme-data", StorageRoot: "s3://lake/acme-data"}
+
+func (r *rig) start(a apps.App) {
+	r.t.Helper()
+	if _, err := r.svc.SetDesiredState(r.ctx, owner, a.ID, apps.Running); err != nil {
+		r.t.Fatal(err)
+	}
+	r.reconcile()
+}
+
+// ADR 0107 / design-data-access item 3: the s3 sidecar reads the token (ro) and writes the keys
+// file; the Streamlit container gets the keys file read only (ADR 0107 accepts that user code can
+// read it), never the token. The sidecar asks for read only, scoped to the warehouse, through the
+// backend, on a health port off the gate's 8080, as the Streamlit container's uid.
+func TestDeployment_S3SidecarForTheWarehouse(t *testing.T) {
+	r, _ := lakeRig(t, acmeWarehouse, nil)
+	a := r.create("Sales")
+	r.start(a)
+	d := r.deployment(a.ID)
+	spec := d.Spec.Template.Spec
+
+	mounts := map[string]map[string]string{"token": {}, "s3": {}}
+	for _, c := range spec.Containers {
+		for _, m := range c.VolumeMounts {
+			if mounts[m.Name] != nil {
+				mode := "rw"
+				if m.ReadOnly {
+					mode = "ro"
+				}
+				mounts[m.Name][c.Name] = mode + " " + m.MountPath
+			}
+		}
+	}
+	if want := map[string]string{"gate": "rw /var/run/booth/token", "pg-sidecar": "ro /var/run/booth/token", "s3-sidecar": "ro /var/run/booth/token"}; !reflect.DeepEqual(mounts["token"], want) {
+		t.Errorf("token volume mounted into %v, want exactly %v (never the streamlit container)", mounts["token"], want)
+	}
+	if want := map[string]string{"s3-sidecar": "rw /var/run/booth/s3", "streamlit": "ro /var/run/booth/s3"}; !reflect.DeepEqual(mounts["s3"], want) {
+		t.Errorf("s3 volume mounted into %v, want %v", mounts["s3"], want)
+	}
+	for _, v := range spec.Volumes {
+		if v.Name == "s3" && (v.EmptyDir == nil || v.EmptyDir.Medium != corev1.StorageMediumMemory) {
+			t.Errorf("s3 volume %+v: want a memory-backed emptyDir", v)
+		}
+	}
+
+	s3 := container(t, d, "s3-sidecar")
+	want := []string{
+		"--kind=s3", "--access=read",
+		`--scope={"backendId":"lake","path":"acme-data"}`, "--workspace=acme",
+		"--token-file=/var/run/booth/token/token",
+		"--credentials-file=/var/run/booth/s3/credentials", "--health-listen=127.0.0.1:8091",
+		"--core-url=http://booth-streamlit.booth-streamlit.svc:8081/internal/broker",
+	}
+	if !reflect.DeepEqual(s3.Args, want) {
+		t.Errorf("s3-sidecar args\n got %v\nwant %v", s3.Args, want)
+	}
+	if len(s3.Env) != 0 || !strings.Contains(s3.Image, "@sha256:") {
+		t.Errorf("s3-sidecar env %v image %q", s3.Env, s3.Image)
+	}
+	// It writes its files 0600, so it must run as the uid that reads them.
+	st := container(t, d, "streamlit")
+	uid := *spec.SecurityContext.RunAsUser
+	if st.SecurityContext.RunAsUser != nil {
+		uid = *st.SecurityContext.RunAsUser
+	}
+	if s3.SecurityContext.RunAsUser == nil || *s3.SecurityContext.RunAsUser != uid || *s3.SecurityContext.RunAsGroup != uid {
+		t.Errorf("s3-sidecar runs as %v, the streamlit container as %d", s3.SecurityContext.RunAsUser, uid)
+	}
+	if !*s3.SecurityContext.ReadOnlyRootFilesystem || *s3.SecurityContext.AllowPrivilegeEscalation {
+		t.Error("s3-sidecar must be read-only, without privilege escalation")
+	}
+	env := map[string]string{}
+	for _, e := range st.Env {
+		env[e.Name] = e.Value
+	}
+	if env["AWS_SHARED_CREDENTIALS_FILE"] != "/var/run/booth/s3/credentials" || env["AWS_CONFIG_FILE"] != "/var/run/booth/s3/credentials.config" ||
+		env["BOOTH_WAREHOUSE_ROOT"] != "s3://lake/acme-data" {
+		t.Errorf("streamlit env %v", env)
+	}
+	for k := range env {
+		if strings.Contains(k, "SECRET") || strings.Contains(k, "SESSION_TOKEN") || strings.Contains(k, "ACCESS_KEY") {
+			t.Errorf("streamlit has key material in env: %s", k)
+		}
+	}
+}
+
+// The warehouse is looked up when a pod is about to start and kept for that pod's life: a running
+// app is never rolled because booth-lakehouse changed or was briefly unreachable.
+func TestDeployment_WarehouseLookedUpAtStartOnly(t *testing.T) {
+	r, calls := lakeRig(t, acmeWarehouse, nil)
+	a := r.create("Sales")
+	r.reconcile()
+	if *calls != 0 {
+		t.Fatalf("looked up the warehouse of a stopped app (%d calls)", *calls)
+	}
+	r.start(a)
+	if *calls != 1 {
+		t.Fatalf("want one lookup at start, got %d", *calls)
+	}
+	hash := r.deployment(a.ID).Annotations[annoSpecHash]
+
+	// Running: the lookup now fails, or finds nothing; the pod keeps its warehouse.
+	r.c.cfg.Data.Lakehouse = func(context.Context, apps.App) (*Warehouse, error) { *calls++; return nil, nil }
+	for i := 0; i < 3; i++ {
+		r.reconcile()
+	}
+	if *calls != 1 || r.deployment(a.ID).Annotations[annoSpecHash] != hash {
+		t.Fatalf("a running app was looked up again (%d calls) or its pod changed", *calls)
+	}
+	// An edit rolls the pod, which keeps the warehouse.
+	cur := mustGet(t, r, a.ID)
+	if _, err := r.svc.Update(r.ctx, owner, a.ID, apps.Input{Name: cur.Name, Source: "print(2)", Shared: cur.Shared}); err != nil {
+		t.Fatal(err)
+	}
+	r.reconcile()
+	if *calls != 1 || warehouseOf(r.deployment(a.ID)) == nil {
+		t.Fatalf("an edit dropped the warehouse or looked it up (%d calls)", *calls)
+	}
+	// Stop and start: looked up afresh (none now), so no s3 sidecar.
+	if _, err := r.svc.SetDesiredState(r.ctx, owner, a.ID, apps.Stopped); err != nil {
+		t.Fatal(err)
+	}
+	r.reconcile()
+	r.start(a)
+	if *calls != 2 {
+		t.Fatalf("want a fresh lookup at the next start, got %d calls", *calls)
+	}
+	for _, c := range r.deployment(a.ID).Spec.Template.Spec.Containers {
+		if c.Name == "s3-sidecar" {
+			t.Fatal("s3-sidecar kept after a start that found no warehouse")
+		}
+	}
+}
+
+// Any lookup failure (lakehouse down, a refused mint) means no s3 sidecar, and the app starts.
+func TestDeployment_WarehouseLookupFailureStartsWithoutIt(t *testing.T) {
+	r, _ := lakeRig(t, nil, errors.New("booth-lakehouse answered 502"))
+	a := r.create("Sales")
+	r.start(a)
+	d := r.deployment(a.ID)
+	if *d.Spec.Replicas != 1 {
+		t.Fatal("the app did not start")
+	}
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == "s3-sidecar" {
+			t.Fatal("s3-sidecar without a warehouse")
+		}
+		for _, e := range c.Env {
+			if strings.HasPrefix(e.Name, "AWS_") || e.Name == "BOOTH_WAREHOUSE_ROOT" {
+				t.Errorf("%s set without a warehouse", e.Name)
 			}
 		}
 	}

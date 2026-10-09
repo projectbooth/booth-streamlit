@@ -94,3 +94,9 @@ def database_url() -> str:
     if status.get("state") == "paused":
         raise DataAccessPaused(status.get("reason") or "data access is paused")
     return url
+
+
+# The lakehouse warehouse (booth_streamlit/s3.py): imported last, it uses the names above.
+from .s3 import duckdb_secret, pyarrow_fs, warehouse_root  # noqa: E402
+
+__all__ += ["duckdb_secret", "pyarrow_fs", "warehouse_root"]
