@@ -88,6 +88,16 @@ api() {
 }
 state() { api "$owner" GET "/api/apps/$1"; echo "$body" | json 'd.status.state'; }
 replicas() { kubectl -n "$ns" get deploy "app-$1" -o jsonpath='{.spec.replicas}' 2>/dev/null; }
+# The app's one live pod (not being deleted). Fails if there isn't exactly one, rather than picking
+# items[0] from a list that may also hold a pod on its way out.
+only_pod() {
+  local id=$1 pods
+  pods=$(kubectl -n "$ns" get pod -l "booth.projectbooth.io/app-id=$id" \
+    -o go-template='{{range .items}}{{if not .metadata.deletionTimestamp}}{{.metadata.name}} {{end}}{{end}}')
+  set -- $pods
+  [ $# -eq 1 ] || fail "want exactly one live pod for app $id, got: '$pods'"
+  echo "$1"
+}
 wait_state() { # ID STATE SECONDS
   local s=""
   for _ in $(seq 1 "$3"); do s=$(state "$1"); [ "$s" = "$2" ] && return 0; sleep 1; done
@@ -110,7 +120,7 @@ for o in "deploy/app-$A" "svc/app-$A" "configmap/app-$A-src" "secret/app-$A-gate
   kubectl -n "$ns" get "$o" >/dev/null || fail "$o was not created"
 done
 test "$(kubectl -n "$ns" get deploy "app-$A" -o jsonpath='{.status.readyReplicas}')" = 1 || fail "not ready"
-pod=$(kubectl -n "$ns" get pod -l "booth.projectbooth.io/app-id=$A" -o jsonpath='{.items[0].metadata.name}')
+pod=$(only_pod "$A")
 test "$(kubectl -n "$ns" get pod "$pod" -o jsonpath='{.metadata.labels.booth\.projectbooth\.io/workspace}')" = acme-analytics || fail "workspace label"
 test "$(kubectl -n "$ns" get pod "$pod" -o jsonpath='{.spec.automountServiceAccountToken}')" = false || fail "app pod mounts a token"
 echo "ok: $A running ($pod)"
@@ -133,17 +143,22 @@ echo "$out"
 echo "$out" | grep -qx "none 401" || fail "no bearer: not refused by the gate"
 echo "$out" | grep -qx "wrong 401" || fail "wrong bearer: not refused by the gate"
 kubectl -n "$ns" logs "$pod" -c gate --tail=20 | grep -q "refused GET /apps/$A/" || fail "the gate did not log the refusal"
-# Recorded, not asserted: an ordinary pod elsewhere, which the NetworkPolicy should block entirely
-# (only if this cluster's CNI enforces NetworkPolicy, ARCHITECTURE.md item 37b).
-np=$(probe "$probe_ns" np-outside "curl -s -o /dev/null -w '%{http_code}' -m 5 http://app-$A.$ns.svc:8080/apps/$A/; true")
-echo "info: unlabelled pod in another namespace -> app gate: ${np} (000 = no connection, NetworkPolicy enforced; 401 = not enforced, the gate refused)"
+# An ordinary pod elsewhere is dropped by the app pods' ingress policy: curl must time out (exit 28),
+# not be refused (exit 7, which would only mean nothing listens). The positive control is the
+# backend-labelled pod above, which reached the same gate and got its 401.
+np=$(probe "$probe_ns" np-outside "curl -s -o /dev/null -w '%{http_code}' -m 5 http://app-$A.$ns.svc:8080/apps/$A/; echo \" exit=\$?\"")
+echo "unlabelled pod in another namespace -> app gate: $np"
+[ "$np" = "000 exit=28" ] || fail "an unlabelled pod's request to the app gate was not dropped by NetworkPolicy: '$np' (want '000 exit=28', a timeout)"
 
 step "cap: a second Start at maxRunning=1 is refused"
 api "$owner" POST "/api/apps/$B/start"
 [ "$code" = 409 ] || fail "start B at the cap: $code $body"
 echo "$body" | grep -q "too many apps" || fail "409 without the reason: $body"
-sleep 3
-[ "$(replicas "$B")" = 0 ] || fail "B got a replica despite the refusal"
+# An absence, so an observation window: B must keep 0 replicas and no pod for 10s (two reconciles).
+for _ in $(seq 1 10); do
+  [ "$(replicas "$B")" = 0 ] && [ -z "$(kubectl -n "$ns" get pod -l "booth.projectbooth.io/app-id=$B" -o name)" ] || fail "B got a replica or a pod despite the refusal"
+  sleep 1
+done
 echo "ok: 409 and no pod for B"
 
 step "idle: no viewer for ${idle}s suspends A; a viewer's visit wakes it"
@@ -161,12 +176,15 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: booth_iframe_session=$
 echo "ok: suspended after idle, woken by a viewer"
 
 step "reconcile: restarting the backend leaves a running app alone"
-uid=$(kubectl -n "$ns" get pod -l "booth.projectbooth.io/app-id=$A" -o jsonpath='{.items[0].metadata.uid}')
+uid=$(kubectl -n "$ns" get pod "$(only_pod "$A")" -o jsonpath='{.metadata.uid}')
+gen=$(kubectl -n "$ns" get deploy "app-$A" -o jsonpath='{.metadata.generation}')
 kubectl -n "$ns" rollout restart deploy/booth-streamlit >/dev/null
 kubectl -n "$ns" rollout status deploy/booth-streamlit --timeout=180s >/dev/null
-sleep 10
-test "$(kubectl -n "$ns" get pod -l "booth.projectbooth.io/app-id=$A" -o jsonpath='{.items[0].metadata.uid}')" = "$uid" || fail "the app's pod was replaced by a backend restart"
+# Wait for the condition, not a fixed time: the new backend reports A running only after its own
+# reconcile has observed A's Deployment, so by then any change it would make has been made.
 wait_state "$A" running 60
+test "$(kubectl -n "$ns" get pod "$(only_pod "$A")" -o jsonpath='{.metadata.uid}')" = "$uid" || fail "the app's pod was replaced by a backend restart"
+test "$(kubectl -n "$ns" get deploy "app-$A" -o jsonpath='{.metadata.generation}')" = "$gen" || fail "the new backend changed the app's Deployment"
 echo "ok: same pod after a backend restart"
 
 step "stop: an owner's Stop scales to 0, and a viewer can't wake it"
@@ -175,8 +193,11 @@ for _ in $(seq 1 30); do [ "$(replicas "$A")" = 0 ] && break; sleep 1; done
 [ "$(replicas "$A")" = 0 ] || fail "stopped app still has a replica"
 code=$(curl -s -o /tmp/lc-stopped -w '%{http_code}' -H "Cookie: booth_iframe_session=$viewer" -H 'Sec-Fetch-Dest: iframe' "$core/iframe/streamlit/apps/$A/")
 [ "$code" = 503 ] && grep -q "stopped" /tmp/lc-stopped || fail "viewer opening a stopped app: $code"
-sleep 5
-[ "$(replicas "$A")" = 0 ] || fail "a viewer's visit woke an owner-stopped app"
+# An absence, so an observation window: no replica for 10s after the viewer's visit.
+for _ in $(seq 1 10); do
+  [ "$(replicas "$A")" = 0 ] || fail "a viewer's visit woke an owner-stopped app"
+  sleep 1
+done
 echo "ok"
 
 step "reconcile: deleting an app removes all of its objects"

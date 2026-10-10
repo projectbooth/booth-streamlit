@@ -59,6 +59,9 @@ jobs:
       # The lakehouse checks (lakehouse-access.sh): booth-lakehouse's main at the time of data-access
       # step c. Its chart pins Lakekeeper by digest; the MinIO fixture is pinned in realcore/minio.yaml.
       LAKEHOUSE_REF: d7ed5338bb89bf00002546b0f3a5fdb07da681b5
+      # kind and its node image for the Calico cluster, pinned as booth-spark pins them.
+      KIND_VERSION: v0.33.0
+      KIND_NODE_IMAGE: kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
     steps:
       - uses: actions/checkout@v4
 
@@ -92,9 +95,18 @@ jobs:
           ref: ${{ env.LAKEHOUSE_REF }}
           path: booth-lakehouse
 
+      # Calico, not kind's default CNI: kindnet enforces NetworkPolicy ingress but not egress
+      # (booth-spark measured it on kind v0.33.0), and egress.sh, pip-access.sh and the ingress
+      # checks assert drops. Same pins as booth-spark (test/integration/cni/).
       - uses: helm/kind-action@v1
         with:
+          version: ${{ env.KIND_VERSION }}
+          node_image: ${{ env.KIND_NODE_IMAGE }}
           cluster_name: booth-streamlit-realcore
+          config: test/integration/cni/kind-calico.yaml
+
+      - name: Calico (pinned manifest and image digests), for NetworkPolicy egress enforcement
+        run: test/integration/cni/calico.sh
 
       - uses: azure/setup-helm@v4
 
@@ -144,6 +156,9 @@ jobs:
       - name: "Lakehouse (ADR 0107): Parquet through the s3 sidecar, read-only lease, scanner with the sidecar, pod roll on a refused renewal"
         run: test/integration/lakehouse-access.sh
 
+      - name: "Egress (ADR 0104): from an app's own container, open and closed, every denial a drop with its control"
+        run: test/integration/egress.sh
+
       - name: "Data access (ADR 0107): reads as owner, token unreadable, stolen bearer, viewer cap, lost owner, take ownership"
         run: test/integration/data-access.sh
 
@@ -157,6 +172,7 @@ jobs:
         if: failure()
         run: |
           kubectl get pods -A
+          kubectl get networkpolicies -A || true
           kubectl -n booth-system logs deployment/booth-core --tail=150 || true
           kubectl get boothmodules -A -o yaml || true
           kubectl -n booth-streamlit get secrets || true

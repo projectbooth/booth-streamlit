@@ -13,9 +13,14 @@ and how apps work is in the README; the data-access design is `docs/design-data-
   `booth.projectbooth.io/component=app`). The chart's ResourceQuota applies to the whole namespace
   and requires every pod in it to declare limits. Don't share the namespace with other workloads.
 - **One install per cluster.** The `BoothModule` is always named `streamlit` (id `streamlit`).
-- **A CNI that enforces NetworkPolicy.** All of the egress rules below, and the rule that only app
-  pods reach the backend's internal port, depend on it (ARCHITECTURE.md item 37b). Every app pod's
-  gate also refuses requests without that app's bearer, whatever the CNI does.
+- **A CNI that enforces NetworkPolicy, egress included.** All of the egress rules below, and the
+  rule that only app pods reach the backend's internal port, depend on it (ARCHITECTURE.md item 37b).
+  - kind's default CNI (kindnet) enforces ingress but not egress: booth-spark measured it on kind
+    v0.33.0. On such a cluster `apps.egress.mode` and every egress rule are silently not enforced.
+  - Calico and k3s's default (flannel with its network-policy controller) are examples that enforce
+    both. Check yours.
+  - This repo's Integration runs on Calico, and `test/integration/egress.sh` asserts the denials.
+  - Every app pod's gate also refuses requests without that app's bearer, whatever the CNI does.
 
 booth-core writes Secrets into the namespace once it sees the `BoothModule`. **You don't create
 any of them.**
