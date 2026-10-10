@@ -19,7 +19,13 @@ and how apps work is in the README; the data-access design is `docs/design-data-
     v0.33.0. On such a cluster `apps.egress.mode` and every egress rule are silently not enforced.
   - Calico enforces both. Check yours: a policy that denies egress must make a connection time
     out.
-  - This repo's Integration runs on Calico, and `test/integration/egress.sh` asserts the denials.
+  - This repo's Integration runs on Calico, and `test/integration/egress.sh` probes from inside an
+    app's container. It asserts that, with `apps.egress.mode=open`, connections are dropped to
+    booth-core's pod and Service address, another namespace's pod, the node's kubelet, and the
+    backend's module port. With `closed`, it asserts the internet is dropped too. It also asserts
+    that the allowed destinations connect.
+  - It does **not** probe the `100.64.0.0/10` or `169.254.0.0/16` exclusions, hosts on your own
+    LAN, or IPv6. Those rest on the policy as written, not on a test.
   - Every app pod's gate also refuses requests without that app's bearer, whatever the CNI does.
 
 booth-core writes Secrets into the namespace once it sees the `BoothModule`. **You don't create
