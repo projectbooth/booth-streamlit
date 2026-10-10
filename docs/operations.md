@@ -24,8 +24,12 @@ and how apps work is in the README; the data-access design is `docs/design-data-
     booth-core's pod and Service address, another namespace's pod, the node's kubelet, and the
     backend's module port. With `closed`, it asserts the internet is dropped too. It also asserts
     that the allowed destinations connect.
-  - It does **not** probe the `100.64.0.0/10` or `169.254.0.0/16` exclusions, hosts on your own
-    LAN, or IPv6. Those rest on the policy as written, not on a test.
+  - It also asserts, with `open`, that a host outside the cluster is dropped at one address in each
+    of `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `100.64.0.0/10`, and at the metadata
+    address `169.254.169.254`. Each of those addresses is made to answer on the test host, and an
+    unrestricted pod reaches it, so the drop is the policy, not an empty address.
+  - It does **not** probe IPv6, other addresses in those ranges, or other ports. Those rest on the
+    policy as written (one rule per range), not on a test.
   - Every app pod's gate also refuses requests without that app's bearer, whatever the CNI does.
 
 booth-core writes Secrets into the namespace once it sees the `BoothModule`. **You don't create

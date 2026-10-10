@@ -108,6 +108,9 @@ jobs:
       - name: Calico (pinned manifest and image digests), for NetworkPolicy egress enforcement
         run: test/integration/cni/calico.sh
 
+      - name: LAN hosts for egress.sh (one answering address per excluded range, on the kind host)
+        run: test/integration/cni/lan-targets.sh booth-streamlit-realcore
+
       - uses: azure/setup-helm@v4
 
       - name: Build and load booth-core, booth-database, booth-storage, booth-catalog, booth-lakehouse, booth-streamlit and app-runtime images

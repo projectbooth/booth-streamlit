@@ -19,3 +19,8 @@ rm -f "$tmp"
 kubectl -n kube-system rollout status ds/calico-node --timeout=600s
 kubectl -n kube-system rollout status deploy/calico-kube-controllers --timeout=600s
 kubectl wait --for=condition=Ready nodes --all --timeout=300s
+# The pool must be kind-calico.yaml's podSubnet: egress.sh relies on 192.168.0.0/16 holding no pods.
+pool=""
+for _ in $(seq 1 60); do pool=$(kubectl get ippools.crd.projectcalico.org -o jsonpath='{.items[*].spec.cidr}' 2>/dev/null || true); [ -n "$pool" ] && break; sleep 2; done
+echo "Calico IP pool: $pool"
+[ "$pool" = 10.244.0.0/16 ] || { echo "Calico's pool is '$pool', not kind-calico.yaml's 10.244.0.0/16" >&2; exit 1; }
