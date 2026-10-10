@@ -1,9 +1,11 @@
 {{- if .Values.quota.enabled }}
 # A hard ceiling on this namespace (docs/design-v0.md (a), "Backstop"): even if the backend's
 # running-app cap had a bug, apps couldn't take more of a single node than this. Size it to
-# apps.maxRunning x (app + gate limits) plus the backend; the defaults below match the default
-# values. With a quota on limits, every pod in the namespace must declare limits (the backend and
-# app pods do).
+# (apps.maxRunning + 1) x one app pod, plus the backend. The + 1 is a pod being replaced. One app
+# pod is the app and gate limits, both data-access sidecars (dataAccess.sidecar.resources, each),
+# and, for ephemeral storage, the 1Gi package volume (apps.pip.siteSizeLimit). The defaults in
+# values.yaml are sized this way for the default values. With a quota on limits, every pod in the
+# namespace must declare limits (the backend and app pods do).
 apiVersion: v1
 kind: ResourceQuota
 metadata:

@@ -29,8 +29,8 @@ Off unless `dataAccess.enabled`. **(d)** per-app packages: an optional `requirem
 every start by an init container that holds no token, bearer or credentials (`apps.pip`); DuckDB
 is in the runtime image; **(e)** lineage and events: owners declare catalog datasets as an app's
 sources (lineage only), and shared apps are published to booth-catalog as `dashboard.*` events
-through a transactional outbox, at least once. Design: `docs/design-v0.md`, including its
-"as built" notes.
+through a transactional outbox, at least once. Design: `docs/design-data-access.md`, including
+its "as built" notes for each step (the module as a whole: `docs/design-v0.md`).
 
 **Who may do what (ADR 0105, interim while ARCHITECTURE.md item 55 is open):** only owners of the
 app's workspace may create, edit, start, stop or delete apps. Editors and viewers can open apps an
@@ -56,7 +56,7 @@ known limits, upgrade and uninstall): `docs/operations.md`.
 | `images/app-runtime` | The per-app Streamlit image and the `booth_streamlit` helper. |
 | `internal/config` | Environment-variable configuration, 1:1 with chart values. |
 | `internal/db` | Connection to this module's own database (ADR 0053). |
-| `internal/events` | Event-bus connection (ADR 0050); the `dashboard.*` publisher will live here. |
+| `internal/events` | Event-bus connection (ADR 0050) and the `dashboard.*` publisher: the drainer that publishes the app model's outbox to JetStream. |
 | `web/` | The module's UI, built into the image and served by the backend. |
 | `charts/booth-streamlit` | Helm chart, including the `BoothModule` manifest (ADR 0019). |
 | `test/contract` | Manifest and chart contract tests (`helm template`, no cluster). |
@@ -65,9 +65,16 @@ known limits, upgrade and uninstall): `docs/operations.md`.
 ## Health
 
 - `/livez`: process is up. Never looks at dependencies.
-- `/healthz` (readiness, and the manifest's `healthCheckPath`): 503 if the database is
-  unreachable; 200 `"degraded"` while the event bus is still connecting (apps keep working
-  without it; only catalog indexing stalls); 200 `"ok"` otherwise.
+- `/healthz` (readiness, and the manifest's `healthCheckPath`):
+  - 503 if the database is unreachable;
+  - 200 `"degraded"` while the event bus is still connecting (apps keep working without it; only
+    catalog indexing stalls), and while any `dashboard.*` event has failed;
+  - 200 `"ok"` otherwise.
+- **Event fields on `/healthz`:**
+  - `eventsPending`: events written but not yet acknowledged by the bus.
+  - `eventsFailed`: events given up on after 20 attempts.
+  - `eventsLastError`: present while `eventsFailed` isn't 0.
+  - What to do about a failed event is in `docs/operations.md`.
 
 ## Tests
 

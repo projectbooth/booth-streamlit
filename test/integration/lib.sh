@@ -8,7 +8,10 @@ ns=booth-streamlit
 probe_ns=booth-streamlit-it-probe
 core_port=${CORE_PORT:-18083}
 kc_port=${KEYCLOAK_PORT:-18091}
-issuer=http://booth-core.booth-system.svc:8080 # booth-core's in-cluster workload issuer (chart default)
+# booth-core's workload issuer in this test install. Not core's chart default (that is the
+# ".svc.cluster.local" form): deploy-realcore.sh sets core's workloadIdentity.issuerUrl to this
+# explicitly, and has storage, catalog and lakehouse trust the same string.
+issuer=http://booth-core.booth-system.svc:8080
 fail() { echo "FAIL: $*" >&2; exit 1; }
 step() { echo "--- $*"; }
 json() { node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf8')); const v=($1); process.stdout.write(v===undefined?'':String(v))"; }
