@@ -77,11 +77,16 @@ ok=1
 expect() { # LABEL GOT REGEX
   if echo "$2" | grep -Eq "$3"; then echo "ok: $1 ($2)"; else echo "FAIL: $1: got '$2', want /$3/"; ok=0; fi
 }
-each() { # RESULT-JSON TARGETS-JSON REGEX PREFIX
-  local name
+each() { # RESULT-JSON TARGETS-JSON REGEX PREFIX: every target checked, and counted
+  local name n=0 want
+  want=$(echo "$2" | json 'Object.keys(d).length')
+  # One name per line, each newline-terminated: `read` skips a last line without one (run
+  # 38075897753 lost the last target of each group that way).
   while IFS= read -r name; do
     expect "$4$name" "$(echo "$1" | N="$name" json 'd[process.env.N]')" "$3"
-  done < <(echo "$2" | json 'Object.keys(d).join("\n")')
+    n=$((n + 1))
+  done < <(echo "$2" | json 'Object.keys(d).map(k => k + "\n").join("")')
+  [ "$n" = "$want" ] || { echo "FAIL: checked $n of $want targets"; ok=0; }
 }
 
 step "apps.egress.mode=open: denied destinations are dropped, each with its positive control"
