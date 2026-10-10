@@ -3,10 +3,11 @@
 # egress policy left the API server, the internet and another namespace's pod and Service
 # reachable). App pods' egress rules are a security boundary here (ADR 0104), so the real-core job
 # needs a CNI that enforces them; egress.sh proves it does on every run. Copied from booth-spark.
-# 192.168.0.0/16 is Calico's default pool (inside the private ranges apps.egress.mode=open
-# excludes).
+# Pods in kind's usual 10.244.0.0/16, not booth-spark's 192.168.0.0/16 (Calico's default): that pool
+# would make every 192.168.x address a cluster address, and egress.sh probes a 192.168.x LAN host
+# that is not one (cni/lan-targets.env). Calico takes its pool from this (kubeadm's podSubnet).
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 networking:
   disableDefaultCNI: true
-  podSubnet: 192.168.0.0/16
+  podSubnet: 10.244.0.0/16

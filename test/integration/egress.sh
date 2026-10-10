@@ -12,7 +12,12 @@
 #     positive control for each denial: the same probe from an unrestricted pod connects, so the
 #     target is up and the timeout is the app pod's egress policy;
 #     allowed, and each must connect: the internet, DNS, the backend's 8081, and the rules this
-#     install adds (booth-database's Postgres, MinIO, the package index).
+#     install adds (booth-database's Postgres, MinIO, the package index);
+#     LAN hosts: an address in each of 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 and
+#     the metadata address 169.254.169.254, none of them a cluster address, each made to answer on
+#     the kind host (cni/lan-targets.sh), must be dropped; positive controls: the unrestricted pod
+#     connects to every one of them, and the app pod connects to an address outside the excluded
+#     ranges that reaches the same host listener the same way.
 #   apps.egress.mode=closed:
 #     the internet is denied (a drop); its positive control is the same probe from the same pod in
 #     open mode. DNS and the explicit rules still work.
@@ -99,6 +104,32 @@ step "apps.egress.mode=open: allowed destinations connect"
 r=$(from_app "$allowed"); echo "app: $r"
 each "$r" "$allowed" '^open$' "allowed: "
 expect "DNS resolves" "$(echo "$r" | json 'd.dns')" '^[0-9.]+$'
+
+step "apps.egress.mode=open: LAN hosts (not cluster addresses) are dropped, with positive controls"
+source "$here/cni/lan-targets.env"
+# Not cluster addresses: no pod, Service or node has one, and Calico's pool is 10.244.0.0/16 (so
+# 192.168.0.0/16 holds no pods; cni/kind-calico.yaml).
+pool=$(kubectl get ippools.crd.projectcalico.org -o jsonpath='{.items[*].spec.cidr}')
+[ "$pool" = 10.244.0.0/16 ] || fail "Calico's pool is '$pool', not 10.244.0.0/16"
+inuse=$( { kubectl get pods -A -o jsonpath='{.items[*].status.podIP}'; echo
+  kubectl get svc -A -o jsonpath='{.items[*].spec.clusterIP}'; echo
+  kubectl get nodes -o jsonpath='{.items[*].status.addresses[*].address}'; echo; } | tr ' ' '\n' | sort -u)
+for a in "$LAN_10" "$LAN_172" "$LAN_192" "$LAN_CGNAT" "$LAN_METADATA" "$LAN_CONTROL"; do
+  echo "$inuse" | grep -qxF "$a" && fail "$a is a cluster address"
+done
+lan=$(node -e '
+const [p, a10, a172, a192, cgnat, md] = process.argv.slice(1);
+process.stdout.write(JSON.stringify({
+  ["10.0.0.0/8 (" + a10 + ")"]: [a10, +p], ["172.16.0.0/12 (" + a172 + ")"]: [a172, +p],
+  ["192.168.0.0/16 (" + a192 + ")"]: [a192, +p], ["100.64.0.0/10 (" + cgnat + ")"]: [cgnat, +p],
+  ["metadata 169.254.0.0/16 (" + md + ")"]: [md, +p]}))' "$LAN_PORT" "$LAN_10" "$LAN_172" "$LAN_192" "$LAN_CGNAT" "$LAN_METADATA")
+outside=$(node -e 'process.stdout.write(JSON.stringify({["outside the excluded ranges (" + process.argv[1] + ")"]: [process.argv[1], +process.argv[2]]}))' "$LAN_CONTROL" "$LAN_PORT")
+r=$(from_app "$lan"); echo "app: $r"
+each "$r" "$lan" '^closed:TimeoutError$' "LAN host denied (dropped): "
+r=$(from_app "$outside"); echo "app: $r"
+each "$r" "$outside" '^open$' "control (the app pod reaches the same listener, allowed address): "
+c=$(from_control "$lan"); echo "control: $c"
+each "$c" "$lan" '^open$' "control (unrestricted pod connects): "
 
 step "apps.egress.mode=closed: the internet is dropped too; DNS and the explicit rules still work"
 helm get values booth-streamlit -n "$ns" -o json >/tmp/egress-values.json
