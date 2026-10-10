@@ -84,7 +84,8 @@ echo "apps: A=$A (owner-user) B=$B (owner2-user)"
 
 step "1. reads as its owner: the app queries a Postgres table through DATABASE_URL"
 wait_query "$A" "rows=alpha,beta" 60 | tee /tmp/q1
-grep -q "insert=refused" /tmp/q1 || fail "the app could write (viewer cap)"
+# The specific refusal: the lease is read-only. Any other error (a lost connection) is not a refusal.
+grep -q "insert=refused ReadOnlySqlTransaction" /tmp/q1 || fail "the app's INSERT was not refused as read-only (viewer cap)"
 as_user_code "$A" 'import os; print(os.environ["DATABASE_URL"])' | grep -q "^postgresql://localhost:5432/bdb_ws_" || fail "DATABASE_URL"
 
 step "2. the workload token and the bearer are unreadable by user code (scanner, with a decoy control)"
@@ -123,17 +124,28 @@ echo "$out" | grep -qx "stolen-bearer 200 is-app-b" || fail "B's bearer did not 
 echo "$out" | grep -qx "no-bearer 401" || fail "forged headers without a bearer"
 echo "$out" | grep -qx "forged-bearer 401" || fail "a made-up bearer"
 echo "$out" | grep -q "^readwrite 403 .*read access" || fail "the forwarder passed a readwrite request"
-np=$(probe "$probe_ns" internal-outside "curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST $internal/internal/token; true")
-echo "info: unlabelled pod in another namespace -> backend :8081: $np (000 = blocked by NetworkPolicy; 401 = not enforced, the bearer check refused)"
+# An unlabelled pod elsewhere is dropped by the backend's ingress policy on 8081: curl must time out
+# (exit 28), not be refused (exit 7). The positive control is the app pod above, which reached the
+# same port and got the bearer check's 401s and B's 200.
+np=$(probe "$probe_ns" internal-outside "curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST $internal/internal/token; echo \" exit=\$?\"")
+echo "unlabelled pod in another namespace -> backend :8081: $np"
+[ "$np" = "000 exit=28" ] || fail "an unlabelled pod's request to the backend's internal port was not dropped: '$np' (want '000 exit=28', a timeout)"
 
 step "4. capped at viewer: owner demoted to editor; the app reads, never writes, every mint granted=viewer"
 kc_groups owner-user remove /workspaces/acme-analytics/owner
 kc_groups owner-user add /workspaces/acme-analytics/editor
 since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 sessions owner-user >/dev/null # sign in again, so core records the new role
-sleep 45 # past refreshMax (20s) for both the backend's re-mint and the gate's re-fetch
+# Wait for the condition, not a fixed time: core has minted for app A since the demotion (the
+# backend re-mints at least every refreshMax, 20s), and the gate has had a refresh to fetch it.
+minted=""
+for _ in $(seq 1 60); do
+  kubectl -n booth-system logs deploy/booth-core --since-time="$since" | grep -q "subject=streamlit:acme-analytics:$A " && { minted=1; break; }
+  sleep 2
+done
+[ -n "$minted" ] || fail "no mint for app A within 120s of the demotion"
 wait_query "$A" "rows=alpha,beta" 30 | tee /tmp/q4
-grep -q "insert=refused" /tmp/q4 || fail "the editor-owned app could write"
+grep -q "insert=refused ReadOnlySqlTransaction" /tmp/q4 || fail "the editor-owned app's INSERT was not refused as read-only"
 mints=$(kubectl -n booth-system logs deploy/booth-core --since-time="$since" | grep "subject=streamlit:acme-analytics:$A " || true)
 echo "$mints" | tail -2
 [ -n "$mints" ] || fail "no mint for app A since the demotion"

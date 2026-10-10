@@ -89,12 +89,19 @@ kubectl -n "$ns" port-forward svc/booth-streamlit 18095:8080 >/tmp/pf-backend.lo
 cleanup_pids+=($!)
 for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:18095/livez && break; sleep 1; done
 kubectl -n booth-system scale statefulset booth-core-nats --replicas=0 >/dev/null
-kubectl -n booth-system wait --for=delete pod/booth-core-nats-0 --timeout=180s >/dev/null 2>&1 || true
-for _ in $(seq 1 60); do [ "$(curl -s http://localhost:18095/healthz | json 'd.eventBus')" = connecting ] && break; sleep 1; done
+# Conditions, not sleeps or swallowed failures: NATS's pod is gone, and the backend sees the bus down.
+gone=""
+for _ in $(seq 1 90); do kubectl -n booth-system get pod booth-core-nats-0 >/dev/null 2>&1 || { gone=1; break; }; sleep 2; done
+[ -n "$gone" ] || fail "booth-core-nats-0 still exists after scaling NATS to zero"
+bus=""
+for _ in $(seq 1 60); do bus=$(curl -s http://localhost:18095/healthz | json 'd.eventBus'); [ "$bus" = connecting ] && break; sleep 1; done
+[ "$bus" = connecting ] || fail "the backend never saw the bus go down (eventBus=$bus)"
 echo "with NATS down: $(curl -s http://localhost:18095/healthz)"
 api "$owner2" PUT "/api/apps/$A" "$(input "Lineage app v3" true)"; [ "$code" = 200 ] || fail "re-share: $code $body"
-sleep 5
-h=$(curl -s http://localhost:18095/healthz); echo "after the change: $h"
+# The event is written in the change's own transaction, so it is pending as soon as the PUT returns.
+h=""
+for _ in $(seq 1 10); do h=$(curl -s http://localhost:18095/healthz); [ "$(echo "$h" | json 'd.eventsPending')" -ge 1 ] && break; sleep 1; done
+echo "after the change: $h"
 [ "$(echo "$h" | json 'd.eventsPending')" -ge 1 ] && [ "$(echo "$h" | json 'd.eventsFailed')" = 0 ] || fail "the event is not waiting in the outbox"
 kubectl -n booth-system scale statefulset booth-core-nats --replicas=1 >/dev/null
 kubectl -n booth-system rollout status statefulset booth-core-nats --timeout=300s >/dev/null

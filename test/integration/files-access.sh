@@ -114,8 +114,15 @@ out=$(raw "put PUT /storage/files/sales/q1.csv" "post POST /storage/files" "dele
   "otherbackend GET /storage/other-files/theirs/x.csv" \
   "otherdataset GET /datasets/$theirs")
 echo "$out"
-for want in "put 405" "post 405" "delete 405" "dotdot 400" "encdotdot 400" "encslash 400" "encslashdotdot 400" "outside 403" "otherbackend 404" "otherdataset 404"; do
+for want in "put 405" "post 405" "delete 405" "otherbackend 404" "otherdataset 404"; do
   echo "$out" | grep -q "^$want " || fail "expected '$want'"
+done
+# Each 400 and 403 by its own reason, not just its status: a 400 for some other cause would not
+# prove the path rule. (404s have their control in section 6: B's bearer reads its own backend.)
+for want in 'dotdot 400 .*and empty segments are not allowed in a path' 'encdotdot 400 .*and empty segments are not allowed in a path' \
+  'encslash 400 .*encoded separators are not allowed in a path' 'encslashdotdot 400 .*encoded separators are not allowed in a path' \
+  'outside 403 .*is outside dataset'; do
+  echo "$out" | grep -q "^$want" || fail "expected /$want/"
 done
 
 step "6. app B's bearer (other-team) reads nothing of app A's"

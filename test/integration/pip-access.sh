@@ -169,6 +169,11 @@ echo "reason: $reason"
 set -- $r; [ "$1" = failed ] || fail "with closed egress the install did not fail: $r"
 t_closed=$2
 echo "$reason" | grep -q "^pip install needs internet access, and apps.egress.mode is closed" || fail "the closed-egress wording is missing"
+# A drop, not a refusal: the index is up (step 1 installed from it, through the rule this step
+# removed), so only the app pod's egress policy can make the connection time out. A refusal would
+# prove nothing (nothing listening), so it fails the check.
+echo "$reason" | grep -q "ConnectTimeoutError" || fail "pip's connection to the index was not dropped (no ConnectTimeoutError): is egress enforced?"
+echo "$reason" | grep -q -i "connection refused" && fail "pip's connection was refused, not dropped: that proves nothing about the egress policy"
 stop_app "$P1"
 helm upgrade booth-streamlit "$repo/charts/booth-streamlit" -n "$ns" -f /tmp/streamlit-values.json >/dev/null
 kubectl -n "$ns" rollout status deploy/booth-streamlit --timeout=300s >/dev/null
