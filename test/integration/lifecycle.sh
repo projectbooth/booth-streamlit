@@ -86,7 +86,9 @@ api() {
   code=$(curl "${args[@]}" "$core/iframe/streamlit$3")
   body=$(cat /tmp/lc-body)
 }
-state() { api "$owner" GET "/api/apps/$1"; echo "$body" | json 'd.status.state'; }
+# Empty unless the API answered 200: right after a backend restart a request can get the gateway's
+# error page, which wait_state must poll past (the old fixed sleep after the restart hid this).
+state() { api "$owner" GET "/api/apps/$1"; if [ "$code" = 200 ]; then echo "$body" | json 'd.status.state'; else echo ""; fi; }
 replicas() { kubectl -n "$ns" get deploy "app-$1" -o jsonpath='{.spec.replicas}' 2>/dev/null; }
 # The app's one live pod (not being deleted). Fails if there isn't exactly one, rather than picking
 # items[0] from a list that may also hold a pod on its way out.
