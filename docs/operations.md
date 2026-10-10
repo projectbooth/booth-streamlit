@@ -17,8 +17,8 @@ and how apps work is in the README; the data-access design is `docs/design-data-
   rule that only app pods reach the backend's internal port, depend on it (ARCHITECTURE.md item 37b).
   - kind's default CNI (kindnet) enforces ingress but not egress: booth-spark measured it on kind
     v0.33.0. On such a cluster `apps.egress.mode` and every egress rule are silently not enforced.
-  - Calico and k3s's default (flannel with its network-policy controller) are examples that enforce
-    both. Check yours.
+  - Calico enforces both. Check yours: a policy that denies egress must make a connection time
+    out.
   - This repo's Integration runs on Calico, and `test/integration/egress.sh` asserts the denials.
   - Every app pod's gate also refuses requests without that app's bearer, whatever the CNI does.
 
