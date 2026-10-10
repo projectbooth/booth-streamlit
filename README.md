@@ -37,6 +37,11 @@ app's workspace may create, edit, start, stop or delete apps. Editors and viewer
 owner has shared with the workspace; opening one that idle shutdown put to sleep wakes it.
 Nobody outside the workspace can see an app. The backend enforces this from the verified role.
 
+## Operating it
+
+What an operator sets and should know (values, trust settings in other modules, health, backups,
+known limits, upgrade and uninstall): `docs/operations.md`.
+
 ## Layout
 
 | Path | What |
