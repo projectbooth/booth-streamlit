@@ -3,7 +3,8 @@ name: Release
 # Publishes the container image and the Helm chart at a matching version, so booth-module-store's
 # bundled catalog (and anyone installing via booth-core's install API) has a real chart reference,
 # and other repos' tests can pin a known-good build instead of main. Mirrors booth-catalog's
-# release workflow. Pushing a `vX.Y.Z` tag triggers it.
+# release workflow. Pushing a `vX.Y.Z` tag triggers it. The chart is also pushed to
+# oci://ghcr.io/projectbooth/charts/booth-streamlit, the reference installs use (ADR 0111).
 on:
   push:
     tags:
@@ -71,3 +72,9 @@ jobs:
         with:
           files: dist/*.tgz
           generate_release_notes: true
+
+      - name: helm registry login (ghcr.io)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
+
+      - name: Push chart as an OCI artifact (ADR 0111)
+        run: helm push dist/booth-streamlit-${{ needs.image.outputs.version }}.tgz oci://ghcr.io/projectbooth/charts
