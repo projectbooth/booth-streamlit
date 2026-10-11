@@ -104,6 +104,14 @@ jobs:
           helm lint .
           helm lint . --set postgres.provisionedByCore=false --set postgres.dsnSecret.name=my-db
 
+      - name: Release chart step (as release.yml packages it), rendered with default values
+        # Keeps the release workflow's packaging from rotting unnoticed between tags.
+        run: |
+          helm package charts/booth-streamlit --version 0.0.0-ci --app-version 0.0.0-ci --destination dist
+          helm template booth-streamlit dist/booth-streamlit-0.0.0-ci.tgz >/tmp/release-render.yaml
+          grep -q 'image: "ghcr.io/projectbooth/booth-streamlit:0.0.0-ci"' /tmp/release-render.yaml
+          grep -q 'ghcr.io/projectbooth/booth-streamlit-app-runtime:0.0.0-ci' /tmp/release-render.yaml
+
   image-build:
     # Catches a broken Dockerfile on the PR that breaks it, not at release time. Not pushed. Both
     # images: the module backend and the per-app Streamlit runtime, plus the runtime's helper tests.
