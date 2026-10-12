@@ -7,6 +7,7 @@ package contract
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -341,4 +342,81 @@ func TestChart_IframeIdentityIssuer(t *testing.T) {
 	if !bytes.Contains(out, []byte("identity.issuerUrl is required")) {
 		t.Errorf("failure message not actionable:\n%s", out)
 	}
+}
+
+// TestChart_IdentityKeysAnnotation is the ADR 0113 / module-manifest.md "Chart annotation: identity
+// keys" contract check, as booth-storage has it: the annotation must be valid JSON, name only shared
+// settings, and every path it names must exist with a default in values.yaml, or core's install-time
+// merge (and a plain `helm template`/CLI install) would silently do nothing for a typo'd path.
+func TestChart_IdentityKeysAnnotation(t *testing.T) {
+	chartBytes, err := os.ReadFile(filepath.Join("..", "..", "charts", "booth-streamlit", "Chart.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chart struct {
+		Annotations map[string]string `yaml:"annotations"`
+	}
+	if err := yaml.Unmarshal(chartBytes, &chart); err != nil {
+		t.Fatalf("parsing Chart.yaml: %v", err)
+	}
+	raw, ok := chart.Annotations["booth.projectbooth.io/identity-keys"]
+	if !ok {
+		t.Fatal("Chart.yaml is missing the booth.projectbooth.io/identity-keys annotation (ADR 0113)")
+	}
+	var mapping map[string]string
+	if err := json.Unmarshal([]byte(raw), &mapping); err != nil {
+		t.Fatalf("booth.projectbooth.io/identity-keys is not valid JSON: %v\nvalue: %s", err, raw)
+	}
+	if len(mapping) == 0 {
+		t.Fatal("booth.projectbooth.io/identity-keys decoded to an empty object")
+	}
+
+	knownKeys := map[string]bool{
+		"issuerUrl": true, "clientId": true, "jwksUrl": true,
+		"workloadIssuerUrl": true, "groupsClaim": true, "iframeIssuerUrl": true,
+	}
+	valuesBytes, err := os.ReadFile(filepath.Join("..", "..", "charts", "booth-streamlit", "values.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]any
+	if err := yaml.Unmarshal(valuesBytes, &values); err != nil {
+		t.Fatalf("parsing values.yaml: %v", err)
+	}
+	for key, path := range mapping {
+		if !knownKeys[key] {
+			t.Errorf("identity-keys annotation names unknown shared setting %q (want one of issuerUrl, clientId, jwksUrl, workloadIssuerUrl, groupsClaim, iframeIssuerUrl)", key)
+		}
+		if _, ok := valueAtPath(values, path); !ok {
+			t.Errorf("identity-keys annotation maps %q to values.yaml path %q, which has no default in values.yaml", key, path)
+		}
+	}
+
+	// Exactly these: this chart verifies only core's iframe assertion, so it has no OIDC issuer,
+	// client id, JWKS URL or workload issuer for core to fill.
+	want := map[string]string{"iframeIssuerUrl": "identity.issuerUrl", "groupsClaim": "identity.groupsClaim"}
+	if !reflect.DeepEqual(mapping, want) {
+		t.Errorf("identity-keys = %v, want %v", mapping, want)
+	}
+	// The default core would otherwise supply: core's chart defaults BOOTH_IFRAME_IDENTITY_ISSUER_URL
+	// to http://<fullname>.<namespace>.svc.cluster.local:<port>/iframe-identity, compared character
+	// for character with the assertion's iss.
+	if got, _ := valueAtPath(values, "identity.issuerUrl"); got != "http://booth-core.booth-system.svc.cluster.local:8080/iframe-identity" {
+		t.Errorf("identity.issuerUrl default = %v, want core's default for release booth-core in booth-system", got)
+	}
+}
+
+func valueAtPath(root map[string]any, dotted string) (any, bool) {
+	cur := any(root)
+	for _, part := range strings.Split(dotted, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = m[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return cur, true
 }

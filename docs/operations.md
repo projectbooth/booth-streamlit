@@ -70,6 +70,11 @@ the first label as well.
 | `quota.hard` | pods 8, `limits.cpu` 9, `limits.memory` 8Gi, `limits.ephemeral-storage` 10Gi | Sized for `maxRunning=5` with both data-access sidecars and packages. Raise it with `maxRunning`. `quota.enabled=false` removes it. |
 | `dataAccess.coreUrl` | `http://booth-core.booth-system.svc:8080` | booth-core is under another release name or namespace: core's in-cluster URL. Used for the broker, the gateway calls to storage, catalog and lakehouse, and minting. |
 
+**Installed through core's install API** (the Module Store's Install button), a core that implements
+ADR 0113 fills `identity.issuerUrl` and `identity.groupsClaim` from its own config, unless the
+install request sets them. Chart.yaml's `booth.projectbooth.io/identity-keys` annotation names
+those two paths. A `helm install` from the CLI gets no such merge, so set them as below.
+
 **When booth-core isn't release `booth-core` in namespace `booth-system`.** Core's chart builds the
 issuer from its own release: `http://<core fullname>.<core namespace>.svc.cluster.local:<port>/iframe-identity`,
 unless core's `iframeIdentity.issuerUrl` is set. Read the value core actually uses and copy it
