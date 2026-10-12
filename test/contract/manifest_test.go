@@ -374,6 +374,7 @@ func TestChart_IdentityKeysAnnotation(t *testing.T) {
 	knownKeys := map[string]bool{
 		"issuerUrl": true, "clientId": true, "jwksUrl": true,
 		"workloadIssuerUrl": true, "groupsClaim": true, "iframeIssuerUrl": true,
+		"coreUrl": true, // ADR 0113 amendment 1
 	}
 	valuesBytes, err := os.ReadFile(filepath.Join("..", "..", "charts", "booth-streamlit", "values.yaml"))
 	if err != nil {
@@ -385,7 +386,7 @@ func TestChart_IdentityKeysAnnotation(t *testing.T) {
 	}
 	for key, path := range mapping {
 		if !knownKeys[key] {
-			t.Errorf("identity-keys annotation names unknown shared setting %q (want one of issuerUrl, clientId, jwksUrl, workloadIssuerUrl, groupsClaim, iframeIssuerUrl)", key)
+			t.Errorf("identity-keys annotation names unknown shared setting %q (want one of issuerUrl, clientId, jwksUrl, workloadIssuerUrl, groupsClaim, iframeIssuerUrl, coreUrl)", key)
 		}
 		if _, ok := valueAtPath(values, path); !ok {
 			t.Errorf("identity-keys annotation maps %q to values.yaml path %q, which has no default in values.yaml", key, path)
@@ -393,8 +394,9 @@ func TestChart_IdentityKeysAnnotation(t *testing.T) {
 	}
 
 	// Exactly these: this chart verifies only core's iframe assertion, so it has no OIDC issuer,
-	// client id, JWKS URL or workload issuer for core to fill.
-	want := map[string]string{"iframeIssuerUrl": "identity.issuerUrl", "groupsClaim": "identity.groupsClaim"}
+	// client id, JWKS URL or workload issuer for core to fill; coreUrl is the address the
+	// data-access backend calls core at (ADR 0113 amendment 1).
+	want := map[string]string{"iframeIssuerUrl": "identity.issuerUrl", "groupsClaim": "identity.groupsClaim", "coreUrl": "dataAccess.coreUrl"}
 	if !reflect.DeepEqual(mapping, want) {
 		t.Errorf("identity-keys = %v, want %v", mapping, want)
 	}
@@ -403,6 +405,22 @@ func TestChart_IdentityKeysAnnotation(t *testing.T) {
 	// for character with the assertion's iss.
 	if got, _ := valueAtPath(values, "identity.issuerUrl"); got != "http://booth-core.booth-system.svc.cluster.local:8080/iframe-identity" {
 		t.Errorf("identity.issuerUrl default = %v, want core's default for release booth-core in booth-system", got)
+	}
+}
+
+// TestChart_CoreUrlReachesTheBackend: the path the annotation maps coreUrl to is the one the
+// Deployment uses for core's address, so a value core supplies there is what the backend calls.
+func TestChart_CoreUrlReachesTheBackend(t *testing.T) {
+	stub := "http://core-stub.example.test:9999"
+	args := append(append([]string{}, dataOn...), "--set", "dataAccess.coreUrl="+stub)
+	dep := string(helmTemplate(t, "templates/deployment.yaml", args...))
+	if !regexp.MustCompile(`BOOTH_CORE_URL\s+value: "` + regexp.QuoteMeta(stub) + `"`).MatchString(dep) {
+		t.Errorf("deployment's BOOTH_CORE_URL is not the dataAccess.coreUrl given (%s)", stub)
+	}
+	// The default core address (values.yaml's dataAccess.coreUrl), not the iframe issuer's
+	// ".svc.cluster.local" host, which is a different setting.
+	if n := strings.Count(dep, "http://booth-core.booth-system.svc:8080"); n != 0 {
+		t.Errorf("deployment still carries the default core address %d time(s) with dataAccess.coreUrl set", n)
 	}
 }
 

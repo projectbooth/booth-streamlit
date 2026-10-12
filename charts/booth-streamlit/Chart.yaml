@@ -13,7 +13,8 @@ home: https://github.com/projectbooth/booth-streamlit
 # so a module installed through the install API (the Module Store's Install button included) is
 # configured without hand-typed values. Core fills a mapped path only when the request doesn't
 # already set it. This chart verifies only core's iframe assertion (no OIDC issuer, client id, JWKS
-# or workload issuer of its own), so it maps just the iframe issuer and the groups claim.
+# or workload issuer of its own), so it maps the iframe issuer and the groups claim, plus core's own
+# address (coreUrl, ADR 0113 amendment 1), which the data-access backend calls.
 annotations:
   booth.projectbooth.io/identity-keys: |
-    {"iframeIssuerUrl":"identity.issuerUrl","groupsClaim":"identity.groupsClaim"}
+    {"iframeIssuerUrl":"identity.issuerUrl","groupsClaim":"identity.groupsClaim","coreUrl":"dataAccess.coreUrl"}
