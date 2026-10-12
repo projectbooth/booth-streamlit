@@ -14,7 +14,7 @@ source "$here/lan-targets.env"
 cluster=$1
 addrs="$LAN_10 $LAN_172 $LAN_192 $LAN_CGNAT $LAN_METADATA $LAN_CONTROL"
 br=br-$(docker network inspect kind -f '{{.Id}}' | cut -c1-12)
-gw=$(ip -4 -o addr show dev "$br" | awk '{print $4}' | cut -d/ -f1 | head -1)
+gw=$(ip -4 -o addr show dev "$br" | awk 'NR == 1 {split($4, a, "/"); print a[1]}')
 [ -n "$gw" ] || { echo "no IPv4 address on $br" >&2; exit 1; }
 echo "kind bridge $br, gateway $gw"
 # None of the addresses may be on a network the host is attached to (kind's, docker0, the runner's
@@ -29,7 +29,7 @@ for a in $addrs; do
   sudo iptables -t nat -I PREROUTING -i "$br" -d "$a" -p tcp --dport "$LAN_PORT" -j DNAT --to-destination "$gw:$LAN_PORT"
 done
 sudo iptables -t nat -S PREROUTING
-node=$(kind get nodes --name "$cluster" | head -1)
+node=$(kind get nodes --name "$cluster" | awk 'NR == 1')
 # From the node itself (host network, no NetworkPolicy): every address must answer.
 for a in $addrs; do
   code=""

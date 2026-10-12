@@ -131,6 +131,10 @@ each "$r" "$outside" '^open$' "control (the app pod reaches the same listener, a
 c=$(from_control "$lan"); echo "control: $c"
 each "$c" "$lan" '^open$' "control (unrestricted pod connects): "
 
+# Not `kubectl ... | grep -q`: under pipefail, grep exiting at its first match can SIGPIPE kubectl
+# and fail the pipeline even though the line matched (run 38272867963 lost a check that way).
+apps_policy_has_internet() { grep -q "0.0.0.0/0" <<<"$(kubectl -n "$ns" get networkpolicy booth-streamlit-apps -o yaml)"; }
+
 step "apps.egress.mode=closed: the internet is dropped too; DNS and the explicit rules still work"
 helm get values booth-streamlit -n "$ns" -o json >/tmp/egress-values.json
 node -e '
@@ -140,8 +144,8 @@ fs.writeFileSync("/tmp/egress-values-closed.json", JSON.stringify(v));'
 helm upgrade booth-streamlit "$repo/charts/booth-streamlit" -n "$ns" -f /tmp/egress-values-closed.json >/dev/null
 kubectl -n "$ns" rollout status deploy/booth-streamlit --timeout=300s >/dev/null
 # The policy, not the pod, changes: wait until the app-pods policy has no internet rule.
-for _ in $(seq 1 30); do kubectl -n "$ns" get networkpolicy booth-streamlit-apps -o yaml | grep -q "0.0.0.0/0" || break; sleep 1; done
-kubectl -n "$ns" get networkpolicy booth-streamlit-apps -o yaml | grep -q "0.0.0.0/0" && fail "the closed-mode policy still has the internet rule"
+for _ in $(seq 1 30); do apps_policy_has_internet || break; sleep 1; done
+apps_policy_has_internet && fail "the closed-mode policy still has the internet rule"
 # Calico programs a changed policy within seconds: allow a few probes for it to converge, and accept
 # only a drop at the end.
 for _ in $(seq 1 6); do
@@ -157,8 +161,8 @@ done
 expect "closed: DNS still resolves" "$(echo "$r" | json 'd.dns')" '^[0-9.]+$'
 helm upgrade booth-streamlit "$repo/charts/booth-streamlit" -n "$ns" -f /tmp/egress-values.json >/dev/null
 kubectl -n "$ns" rollout status deploy/booth-streamlit --timeout=300s >/dev/null
-for _ in $(seq 1 30); do kubectl -n "$ns" get networkpolicy booth-streamlit-apps -o yaml | grep -q "0.0.0.0/0" && break; sleep 1; done
-kubectl -n "$ns" get networkpolicy booth-streamlit-apps -o yaml | grep -q "0.0.0.0/0" || fail "open mode was not restored"
+for _ in $(seq 1 30); do apps_policy_has_internet && break; sleep 1; done
+apps_policy_has_internet || fail "open mode was not restored"
 
 for _ in $(seq 1 30); do api "$owner2" DELETE "/api/apps/$A"; [ "$code" = 204 ] && break; sleep 2; done
 [ "$ok" = 1 ] || fail "egress: see the FAIL lines above"

@@ -86,7 +86,7 @@ step "1. reads as its owner: the app queries a Postgres table through DATABASE_U
 wait_query "$A" "rows=alpha,beta" 60 | tee /tmp/q1
 # The specific refusal: the lease is read-only. Any other error (a lost connection) is not a refusal.
 grep -q "insert=refused ReadOnlySqlTransaction" /tmp/q1 || fail "the app's INSERT was not refused as read-only (viewer cap)"
-as_user_code "$A" 'import os; print(os.environ["DATABASE_URL"])' | grep -q "^postgresql://localhost:5432/bdb_ws_" || fail "DATABASE_URL"
+grep -q "^postgresql://localhost:5432/bdb_ws_" <<<"$(as_user_code "$A" 'import os; print(os.environ["DATABASE_URL"])')" || fail "DATABASE_URL"
 
 step "2. the workload token and the bearer are unreadable by user code (scanner, with a decoy control)"
 bearer=$(kubectl -n "$ns" get secret "app-$A-gate" -o jsonpath='{.data.bearer}' | base64 -d)
@@ -140,7 +140,7 @@ sessions owner-user >/dev/null # sign in again, so core records the new role
 # backend re-mints at least every refreshMax, 20s), and the gate has had a refresh to fetch it.
 minted=""
 for _ in $(seq 1 60); do
-  kubectl -n booth-system logs deploy/booth-core --since-time="$since" | grep -q "subject=streamlit:acme-analytics:$A " && { minted=1; break; }
+  grep -q "subject=streamlit:acme-analytics:$A " <<<"$(kubectl -n booth-system logs deploy/booth-core --since-time="$since")" && { minted=1; break; }
   sleep 2
 done
 [ -n "$minted" ] || fail "no mint for app A within 120s of the demotion"
@@ -175,7 +175,7 @@ wait_query "$A" "paused=" 45
 step "6. take ownership by another workspace owner: logged, and data comes back"
 api "$owner2" POST "/api/apps/$A/take-ownership"
 [ "$code" = 200 ] && [ "$(echo "$body" | json 'd.owner')" = "$owner2_sub" ] || fail "take ownership: $code $body"
-kubectl -n "$ns" logs deploy/booth-streamlit --since=2m | grep -q "take ownership: app=$A workspace=acme-analytics by=$owner2_sub previous_owner=$owner_sub" \
+grep -q "take ownership: app=$A workspace=acme-analytics by=$owner2_sub previous_owner=$owner_sub" <<<"$(kubectl -n "$ns" logs deploy/booth-streamlit --since=2m)" \
   || fail "the take-over was not logged with who, which app and the previous owner"
 api "$owner2" GET "/api/apps/$A/ownership-changes"
 [ "$(echo "$body" | json 'd.changes.length')" = 1 ] || fail "ownership history: $body"
