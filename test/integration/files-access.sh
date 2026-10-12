@@ -143,6 +143,7 @@ for want in "a-object 404" "a-dataset 404" "a-content 404"; do echo "$out" | gre
 echo "$out" | grep -q "^b-own 200 content of theirs/x.csv" || fail "B's bearer should still resolve to B (its own workspace's file)"
 
 step "7. a paused owner gets 403 with the reason"
+old_pod=$(app_pod "$A")
 kc_groups owner-user remove /workspaces/acme-analytics/owner
 sessions owner-user >/dev/null # core records the lost role
 got=""
@@ -153,6 +154,14 @@ for _ in $(seq 1 45); do
 done
 echo "$got"
 echo "$got" | grep -q '^paused 403 .*data_access_paused.*no longer has access' || fail "no 403 with the reason for a paused owner"
+# The pause rolls the pod (as in data-access.sh and lakehouse-access.sh step 5): wait for the new
+# one before exec'ing, or the exec can land in the old pod as it is killed (exit 137, run
+# 38284777806).
+for _ in $(seq 1 90); do
+  p=$(app_pod "$A"); [ -n "$p" ] && [ "$p" != "$old_pod" ] && [ "$(kubectl -n "$ns" get deploy "app-$A" -o jsonpath='{.status.readyReplicas}')" = 1 ] && break
+  sleep 2
+done
+[ -n "$p" ] && [ "$p" != "$old_pod" ] || fail "the pod did not roll after the pause (still $old_pod)"
 out=$(as_user_code "$A" "
 import booth_streamlit as b
 from booth_streamlit import files
