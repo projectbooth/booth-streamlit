@@ -85,9 +85,9 @@ kc_groups() { # USER add|remove GROUP-PATH
   gid=$(curl -s -H "Authorization: Bearer $t" "http://localhost:$kc_port/admin/realms/booth/group-by-path$3" | json 'd.id')
   [ -n "$uid" ] && [ -n "$gid" ] || fail "keycloak: no user $1 or group $3"
   if [ "$2" = add ]; then
-    curl -s -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $t" "http://localhost:$kc_port/admin/realms/booth/users/$uid/groups/$gid" | grep -q 204 || fail "keycloak: adding $1 to $3"
+    [ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $t" "http://localhost:$kc_port/admin/realms/booth/users/$uid/groups/$gid")" = 204 ] || fail "keycloak: adding $1 to $3"
   else
-    curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $t" "http://localhost:$kc_port/admin/realms/booth/users/$uid/groups/$gid" | grep -q 204 || fail "keycloak: removing $1 from $3"
+    [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $t" "http://localhost:$kc_port/admin/realms/booth/users/$uid/groups/$gid")" = 204 ] || fail "keycloak: removing $1 from $3"
   fi
 }
 

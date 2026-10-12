@@ -144,7 +144,7 @@ out=$(probe "$ns" gate-forged "$gate_script" \
 echo "$out"
 echo "$out" | grep -qx "none 401" || fail "no bearer: not refused by the gate"
 echo "$out" | grep -qx "wrong 401" || fail "wrong bearer: not refused by the gate"
-kubectl -n "$ns" logs "$pod" -c gate --tail=20 | grep -q "refused GET /apps/$A/" || fail "the gate did not log the refusal"
+grep -q "refused GET /apps/$A/" <<<"$(kubectl -n "$ns" logs "$pod" -c gate --tail=20)" || fail "the gate did not log the refusal"
 # An ordinary pod elsewhere is dropped by the app pods' ingress policy: curl must time out (exit 28),
 # not be refused (exit 7, which would only mean nothing listens). The positive control is the
 # backend-labelled pod above, which reached the same gate and got its 401.
