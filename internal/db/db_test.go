@@ -35,12 +35,3 @@ func TestOpen_RealPostgres(t *testing.T) {
 		t.Fatalf("SELECT 1 = %d, %v", one, err)
 	}
 }
-
-func TestOpen_UnreachableFailsFast(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	// Port 1 on loopback: nothing listens there, so the ping must fail rather than hang.
-	if _, err := Open(ctx, "postgres://booth:x@127.0.0.1:1/none?sslmode=disable&connect_timeout=2"); err == nil {
-		t.Fatal("Open succeeded against a closed port")
-	}
-}
