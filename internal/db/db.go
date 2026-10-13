@@ -6,19 +6,25 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Open connects to dsn and verifies the connection.
+// Open connects to dsn and verifies the connection, riding out a refused or unreachable first
+// connection for up to DefaultMaxElapsed (wait.go, ARCHITECTURE.md item 66 (c)).
 func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	return open(ctx, dsn, DefaultMaxElapsed)
+}
+
+func open(ctx context.Context, dsn string, maxElapsed time.Duration) (*pgxpool.Pool, error) {
+	pool, err := pgxpool.New(ctx, dsn) // parses the DSN; connects lazily
 	if err != nil {
 		return nil, fmt.Errorf("connecting to postgres: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
+	if err := Retry(ctx, "pinging postgres", maxElapsed, func(actx context.Context) error { return pool.Ping(actx) }); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("pinging postgres: %w", err)
+		return nil, err
 	}
 	return pool, nil
 }
