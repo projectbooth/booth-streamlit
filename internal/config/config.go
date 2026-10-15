@@ -84,6 +84,10 @@ type Data struct {
 	FilesObjectTimeout  time.Duration
 	FilesMetaTimeout    time.Duration
 	FilesMaxConcurrent  int
+	// Writes turns on app writes through booth-api (ADR 0117, dataAccess.writes.enabled): the write
+	// proxy, the Write targets panel, and the grant revoke on take ownership, which then fails
+	// closed if booth-api can't be reached. Needs booth-api installed.
+	Writes bool
 }
 
 // Lifecycle is the per-app container configuration. Every value comes from the chart.
@@ -112,6 +116,10 @@ type Lifecycle struct {
 	PipSiteSizeLimit string
 	// PipEgressClosed: apps.egress.mode is closed and no package-index egress is configured.
 	PipEgressClosed bool
+	// PipIndexEgress: apps.pip.egress names an in-cluster package index (an egress rule exists).
+	PipIndexEgress bool
+	// EgressOpen: apps.egress.mode is open. An app with write targets is closed anyway.
+	EgressOpen bool
 }
 
 // Load reads configuration from the environment.
@@ -140,6 +148,8 @@ func Load() (Config, error) {
 			PipTrustedHost:   os.Getenv("BOOTH_APP_PIP_TRUSTED_HOST"),
 			PipSiteSizeLimit: getEnv("BOOTH_APP_PIP_SITE_SIZE_LIMIT", "1Gi"),
 			PipEgressClosed:  os.Getenv("BOOTH_APP_PIP_EGRESS_CLOSED") == "true",
+			PipIndexEgress:   os.Getenv("BOOTH_APP_PIP_INDEX_EGRESS") == "true",
+			EgressOpen:       getEnv("BOOTH_APP_EGRESS_MODE", "open") == "open",
 		},
 	}
 	cfg.Lifecycle.PipTimeout = 5 * time.Minute
@@ -181,6 +191,7 @@ func Load() (Config, error) {
 		d.SidecarResources = os.Getenv("BOOTH_APP_SIDECAR_RESOURCES")
 		d.Database = os.Getenv("BOOTH_APP_DATABASE") == "true"
 		d.Lakehouse = os.Getenv("BOOTH_APP_LAKEHOUSE") == "true"
+		d.Writes = os.Getenv("BOOTH_APP_WRITES") == "true"
 		for _, req := range []struct{ name, val string }{
 			{"BOOTH_WORKLOAD_MINT_URL", d.MintURL}, {"BOOTH_WORKLOAD_MINT_CREDENTIAL", d.MintCredential},
 			{"BOOTH_CORE_URL", d.CoreURL}, {"BOOTH_INTERNAL_URL", d.InternalURL}, {"BOOTH_APP_SIDECAR_IMAGE", d.SidecarImage},

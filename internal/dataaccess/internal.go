@@ -35,6 +35,8 @@ type Internal struct {
 	HTTP    *http.Client
 	// Files, if set, serves the file read proxy (/files/...) on the same port.
 	Files *Files
+	// Writes, if set, serves the write proxy (/writes/...) on the same port (ADR 0117).
+	Writes *Writes
 }
 
 // Router returns the internal port's handler.
@@ -44,6 +46,9 @@ func (in *Internal) Router() http.Handler {
 	r.Post("/internal/broker/api/credentials", in.broker)
 	if in.Files != nil {
 		in.Files.mount(r, in)
+	}
+	if in.Writes != nil {
+		in.Writes.mount(r, in)
 	}
 	return r
 }

@@ -871,3 +871,101 @@ func TestObserve_Pip(t *testing.T) {
 		t.Errorf("installed, streamlit starting: %+v", st)
 	}
 }
+
+func pipEnv(t *testing.T, d *appsv1.Deployment) map[string]string {
+	t.Helper()
+	for _, c := range d.Spec.Template.Spec.InitContainers {
+		if c.Name == "pip" {
+			out := map[string]string{}
+			for _, e := range c.Env {
+				out[e.Name] = e.Value
+			}
+			return out
+		}
+	}
+	t.Fatal("no pip init container")
+	return nil
+}
+
+// ADR 0117 "Reconciled design" item 7: an app with any write target runs with egress closed. The
+// pod's egress label selects the chart's open-egress policy or not; declaring the first target or
+// removing the last rolls the pod; pip is told its egress is closed unless an in-cluster index has
+// its own rule.
+func TestDeployment_WriteTargetsCloseTheAppsEgress(t *testing.T) {
+	r := newRig(t)
+	a := r.createWithRequirements("Finance", "humanize\n")
+	r.reconcile()
+	d := r.deployment(a.ID)
+	if got := d.Spec.Template.Labels[LabelEgress]; got != "open" {
+		t.Fatalf("egress label %q, want open for an app that doesn't write", got)
+	}
+	if _, ok := d.Spec.Selector.MatchLabels[LabelEgress]; ok {
+		t.Error("the egress label is in the Deployment's selector, which can't change")
+	}
+	if pipEnv(t, d)["BOOTH_PIP_EGRESS_CLOSED"] != "false" {
+		t.Errorf("pip env %v", pipEnv(t, d))
+	}
+	hash := d.Annotations[annoSpecHash]
+
+	if _, err := r.svc.SetWriteTargets(r.ctx, owner, a.ID, apps.WriteTargetsInput{Targets: []apps.WriteTarget{{API: "household", Operations: []string{"insert"}}}, Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	r.reconcile()
+	d = r.deployment(a.ID)
+	if got := d.Spec.Template.Labels[LabelEgress]; got != "closed" {
+		t.Errorf("egress label %q, want closed for an app with a write target", got)
+	}
+	if d.Annotations[annoSpecHash] == hash {
+		t.Error("declaring a write target didn't roll the pod")
+	}
+	if pipEnv(t, d)["BOOTH_PIP_EGRESS_CLOSED"] != "true" {
+		t.Errorf("pip isn't told its egress is closed: %v", pipEnv(t, d))
+	}
+	// With an in-cluster index rule, pip can still install.
+	r.c.cfg.Pip.IndexEgress = true
+	r.reconcile()
+	if pipEnv(t, r.deployment(a.ID))["BOOTH_PIP_EGRESS_CLOSED"] != "false" {
+		t.Error("an in-cluster index was reported as unreachable")
+	}
+
+	if _, err := r.svc.SetWriteTargets(r.ctx, owner, a.ID, apps.WriteTargetsInput{}); err != nil {
+		t.Fatal(err)
+	}
+	r.reconcile()
+	if got := r.deployment(a.ID).Spec.Template.Labels[LabelEgress]; got != "open" {
+		t.Errorf("egress label %q after removing every target, want open", got)
+	}
+}
+
+// The write proxy URL reaches the Streamlit container only for an app with write targets, and only
+// when the install turns app writes on.
+func TestDeployment_WritesURLOnlyForAnAppThatWrites(t *testing.T) {
+	r := dataRig(t)
+	a := r.create("Finance")
+	writesURL := func() string {
+		r.reconcile()
+		for _, e := range container(t, r.deployment(a.ID), "streamlit").Env {
+			if e.Name == "BOOTH_WRITES_URL" {
+				return e.Value
+			}
+		}
+		return ""
+	}
+	declare := func(targets []apps.WriteTarget) {
+		if _, err := r.svc.SetWriteTargets(r.ctx, owner, a.ID, apps.WriteTargetsInput{Targets: targets, Confirmed: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	declare([]apps.WriteTarget{{API: "household", Operations: []string{"insert"}}})
+	if got := writesURL(); got != "" {
+		t.Errorf("BOOTH_WRITES_URL=%q with app writes off in the install", got)
+	}
+	r.c.cfg.Data.Writes = true
+	if got := writesURL(); got != "http://127.0.0.1:8090/writes" {
+		t.Errorf("BOOTH_WRITES_URL=%q, want the gate's loopback /writes", got)
+	}
+	declare(nil)
+	if got := writesURL(); got != "" {
+		t.Errorf("BOOTH_WRITES_URL=%q for an app with no write targets", got)
+	}
+}

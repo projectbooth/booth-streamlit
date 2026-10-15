@@ -32,6 +32,16 @@ sources (lineage only), and shared apps are published to booth-catalog as `dashb
 through a transactional outbox, at least once. Design: `docs/design-data-access.md`, including
 its "as built" notes for each step (the module as a whole: `docs/design-v0.md`).
 
+App writes (ADR 0117, `docs/design-app-writes.md`), phase 1 (`dataAccess.writes.enabled`, off by
+default): an owner declares in an app's **Write targets** which booth-api APIs it may write to and
+with which operations (insert by default; delete off by default), with a plain-words confirmation;
+the owner also grants the app on booth-api's own page, and a write needs both. App code writes with
+`booth_streamlit.api.insert/update/delete`, through the gate to the backend, which refuses anything
+undeclared and forwards the rest to booth-api through core's gateway with the app's own token. Every
+viewer sees the targets in a header above the app. An app with any target has no internet. Take
+ownership revokes the app's grants in booth-api and fails closed. Uploads (phase 2) wait for
+booth-storage's upload grants.
+
 **Who may do what (ADR 0105, interim while ARCHITECTURE.md item 55 is open):** only owners of the
 app's workspace may create, edit, start, stop or delete apps. Editors and viewers can open apps an
 owner has shared with the workspace; opening one that idle shutdown put to sleep wakes it.

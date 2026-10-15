@@ -2,6 +2,7 @@ package apps
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/projectbooth/booth-streamlit/internal/identity"
@@ -59,6 +60,22 @@ func (s *Service) TakeOwnership(ctx context.Context, c identity.Caller, id strin
 	}
 	if a.DataPausedReason == "" {
 		return App{}, ErrNotPaused
+	}
+	// ADR 0117 item 1a: clear the write declaration, then revoke the app's grants in booth-api, and
+	// only then change the owner. Clearing first makes the write proxy refuse at once; a failed
+	// revoke leaves the declaration cleared (less access, never more) and the owner unchanged.
+	if a.Writes() {
+		if _, err := s.store.SetWriteTargets(ctx, a.Workspace, a.ID, nil, c.Subject, s.now().UTC()); err != nil {
+			return App{}, err
+		}
+		log.Printf("take ownership: app=%s workspace=%s write targets cleared", a.ID, a.Workspace)
+		s.changed(a.ID)
+	}
+	if s.Revoker != nil {
+		if err := s.Revoker.RevokeGrants(ctx, a.Workspace, Principal(a.Workspace, a.ID), c.Subject); err != nil {
+			log.Printf("take ownership refused: app=%s workspace=%s by=%s: revoking write grants: %v", a.ID, a.Workspace, c.Subject, err)
+			return App{}, fmt.Errorf("%w (%v)", ErrRevokeFailed, err)
+		}
 	}
 	prev, err := s.store.TakeOwnership(ctx, a.Workspace, a.ID, c.Subject, a.DataPausedReason, s.now().UTC())
 	if err != nil {

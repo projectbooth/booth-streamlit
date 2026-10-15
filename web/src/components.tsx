@@ -1,4 +1,4 @@
-import { ApiError } from "./api";
+import { ApiError, type WriteOperation, type WriteTarget } from "./api";
 
 /**
  * ADR 0105: an app's code runs in the viewer's browser with the same access as the shell page
@@ -22,4 +22,24 @@ export const SOURCES_WORDING =
 export function ErrorText({ error }: { error: Error }) {
   const msg = error instanceof ApiError && error.status === 403 ? "Only workspace owners can do that." : error.message;
   return <p role="alert" className="text-sm text-red-700 dark:text-red-400">{msg}</p>;
+}
+
+const OP_WORDS: Record<WriteOperation, string> = { insert: "add", update: "change", delete: "delete" };
+
+/** "add, change" for a target's operations, in plain words. */
+export const opWords = (ops: WriteOperation[]) => ops.map((o) => OP_WORDS[o]).join(", ");
+
+/** "household (add, change) · notes (add)". */
+export const targetsWording = (targets: WriteTarget[]) => targets.map((t) => `${t.api} (${opWords(t.operations)})`).join(" · ");
+
+/**
+ * ADR 0117 item 2: every viewer sees what an app can write, above the app, on every visit. Rendered
+ * by this module's page, never by the app, and it can't be dismissed.
+ */
+export function WritesHeader({ targets }: { targets: WriteTarget[] }) {
+  return (
+    <p role="note" aria-label="What this app can change" className="border-b border-sky-300 bg-sky-50 px-4 py-2 text-sm text-sky-950 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100">
+      This app can write to: {targetsWording(targets)}. Anyone who opens it can make these changes, as the app.
+    </p>
+  );
 }

@@ -112,15 +112,27 @@ func TestChart_BackendRoleIsExactlyTheDesignNotes(t *testing.T) {
 	}
 }
 
+// policiesByName returns the rendered NetworkPolicies' specs by name.
+func policiesByName(t *testing.T, args ...string) map[string]map[string]any {
+	t.Helper()
+	out := map[string]map[string]any{}
+	for _, p := range docs(t, "NetworkPolicy", args...) {
+		out[p["metadata"].(map[string]any)["name"].(string)] = p["spec"].(map[string]any)
+	}
+	return out
+}
+
 // ADR 0104 item 4 and design note (b): app pods accept traffic only from the backend on the gate's
 // port; egress is DNS plus (mode open) the internet minus every private, CGNAT and link-local range,
-// which includes the cloud metadata address; mode closed is DNS only.
+// which includes the cloud metadata address; mode closed is DNS only. ADR 0117 item 7: the internet
+// is a second policy selecting only pods labelled egress=open, so an app with write targets (which
+// the backend labels closed) has none, and with mode closed that policy isn't rendered at all.
 func TestChart_AppNetworkPolicy(t *testing.T) {
-	pols := docs(t, "NetworkPolicy")
-	if len(pols) != 1 {
-		t.Fatalf("want one NetworkPolicy, got %d", len(pols))
+	pols := policiesByName(t)
+	if len(pols) != 2 || pols["booth-streamlit-apps"] == nil || pols["booth-streamlit-apps-egress-open"] == nil {
+		t.Fatalf("want the base app policy and the open-egress policy, got %v", pols)
 	}
-	spec := pols[0]["spec"].(map[string]any)
+	spec := pols["booth-streamlit-apps"]
 	if sel := spec["podSelector"].(map[string]any)["matchLabels"].(map[string]any); sel["booth.projectbooth.io/component"] != "app" {
 		t.Errorf("policy selects %v, want the app pods", sel)
 	}
@@ -139,7 +151,22 @@ func TestChart_AppNetworkPolicy(t *testing.T) {
 		t.Errorf("ingress port %v, want the gate's 8080", port)
 	}
 
-	open := string(helmTemplate(t, "templates/networkpolicy.yaml"))
+	// The base policy has no internet rule: a pod the open policy doesn't select has none.
+	if base := yamlString(t, spec["egress"]); strings.Contains(base, "ipBlock") || !strings.Contains(base, "port: 53") {
+		t.Errorf("the base app policy must not carry the internet rule:\n%s", base)
+	}
+	openSpec := pols["booth-streamlit-apps-egress-open"]
+	sel := openSpec["podSelector"].(map[string]any)["matchLabels"].(map[string]any)
+	if len(sel) != 2 || sel["booth.projectbooth.io/component"] != "app" || sel["booth.projectbooth.io/egress"] != "open" {
+		t.Errorf("open-egress policy selects %v, want app pods labelled egress=open only", sel)
+	}
+	if types := openSpec["policyTypes"].([]any); len(types) != 1 || types[0] != "Egress" {
+		t.Errorf("open-egress policyTypes %v, want Egress only (ingress stays the base policy's)", types)
+	}
+	if _, ok := openSpec["ingress"]; ok {
+		t.Error("the open-egress policy must not add ingress")
+	}
+	open := yamlString(t, openSpec["egress"])
 	for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"} {
 		if !strings.Contains(open, cidr) {
 			t.Errorf("open egress does not exclude %s", cidr)
@@ -147,6 +174,9 @@ func TestChart_AppNetworkPolicy(t *testing.T) {
 	}
 	if !strings.Contains(open, "cidr: 0.0.0.0/0") {
 		t.Error("open egress has no internet rule")
+	}
+	if closedPols := policiesByName(t, "--set", "apps.egress.mode=closed"); len(closedPols) != 1 || closedPols["booth-streamlit-apps-egress-open"] != nil {
+		t.Errorf("mode closed renders %v; the open-egress policy must be absent", closedPols)
 	}
 	closed := string(helmTemplate(t, "templates/networkpolicy.yaml", "--set", "apps.egress.mode=closed"))
 	if strings.Contains(closed, "ipBlock") || !strings.Contains(closed, "port: 53") {
@@ -239,6 +269,7 @@ func TestChart_Pip(t *testing.T) {
 	}
 	if got, want := env(), map[string]string{
 		"BOOTH_APP_PIP_INDEX_URL": "", "BOOTH_APP_PIP_TRUSTED_HOST": "", "BOOTH_APP_PIP_TIMEOUT": "5m", "BOOTH_APP_PIP_SITE_SIZE_LIMIT": "1Gi", "BOOTH_APP_PIP_EGRESS_CLOSED": "false",
+		"BOOTH_APP_PIP_INDEX_EGRESS": "false",
 	}; !reflect.DeepEqual(got, want) {
 		t.Errorf("defaults %v, want %v", got, want)
 	}
@@ -247,7 +278,7 @@ func TestChart_Pip(t *testing.T) {
 	}
 	index := []string{"--set", "apps.pip.indexUrl=http://pypi.booth-pypi.svc:8080/simple", "--set", "apps.pip.egress.podSelector.app=pypi",
 		"--set", `apps.pip.egress.namespaceSelector.kubernetes\.io/metadata\.name=booth-pypi`}
-	if got := env(append(index, "--set", "apps.egress.mode=closed")...); got["BOOTH_APP_PIP_EGRESS_CLOSED"] != "false" || got["BOOTH_APP_PIP_INDEX_URL"] != "http://pypi.booth-pypi.svc:8080/simple" {
+	if got := env(append(index, "--set", "apps.egress.mode=closed")...); got["BOOTH_APP_PIP_EGRESS_CLOSED"] != "false" || got["BOOTH_APP_PIP_INDEX_EGRESS"] != "true" || got["BOOTH_APP_PIP_INDEX_URL"] != "http://pypi.booth-pypi.svc:8080/simple" {
 		t.Errorf("closed egress with an index rule: %v", got)
 	}
 	if pol := string(helmTemplate(t, "templates/networkpolicy.yaml")); strings.Contains(pol, "package index") {

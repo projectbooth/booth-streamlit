@@ -73,6 +73,11 @@ spec:
             # Closed egress and no index egress rule: pip can't reach any index, so say so.
             - name: BOOTH_APP_PIP_EGRESS_CLOSED
               value: {{ and (eq .Values.apps.egress.mode "closed") (not .Values.apps.pip.egress.podSelector) | quote }}
+            # An app with write targets has no internet; an in-cluster index rule still serves pip.
+            - name: BOOTH_APP_PIP_INDEX_EGRESS
+              value: {{ not (not .Values.apps.pip.egress.podSelector) | quote }}
+            - name: BOOTH_APP_EGRESS_MODE
+              value: {{ .Values.apps.egress.mode | quote }}
             - name: BOOTH_APP_MAX_RUNNING
               value: {{ .Values.apps.maxRunning | int | quote }}
             - name: BOOTH_APP_MAX_RUNNING_PER_WORKSPACE
@@ -115,6 +120,8 @@ spec:
               value: {{ .Values.dataAccess.files.metaTimeout | quote }}
             - name: BOOTH_FILES_MAX_CONCURRENT
               value: {{ .Values.dataAccess.files.maxConcurrent | int | quote }}
+            - name: BOOTH_APP_WRITES
+              value: {{ .Values.dataAccess.writes.enabled | quote }}
             {{- with .Values.dataAccess.refreshMax }}
             - name: BOOTH_DATA_REFRESH_MAX
               value: {{ . | quote }}

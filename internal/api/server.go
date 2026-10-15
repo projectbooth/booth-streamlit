@@ -64,6 +64,11 @@ type Deps struct {
 	Status StatusFunc
 	// DataAccess tells the UI whether this install gives apps data access (ADR 0104/0107).
 	DataAccess bool
+	// Writes: app writes through booth-api are on (ADR 0117; needs DataAccess).
+	Writes bool
+	// EgressOpen: the release's apps.egress.mode is open, so the editor says that declaring a
+	// write target closes this app's egress.
+	EgressOpen bool
 }
 
 // dbPingTimeout bounds the /healthz database check, so a hung Postgres shows as unhealthy within

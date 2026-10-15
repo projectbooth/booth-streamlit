@@ -122,7 +122,9 @@ apps:
   maxWebsocket: 8h
   egress:
     # ADR 0104 item 4: "open" = internet, but no in-cluster or link-local destinations;
-    # "closed" = DNS only. See templates/networkpolicy.yaml.
+    # "closed" = DNS only. See templates/networkpolicy.yaml. With open, an app that declares a
+    # write target is still closed (ADR 0117): its pod is labelled booth.projectbooth.io/egress:
+    # closed, which the open-egress policy doesn't select.
     mode: open
     dns:
       namespaceSelector: {kubernetes.io/metadata.name: kube-system}
@@ -182,6 +184,17 @@ dataAccess:
     objectTimeout: 5m
     metaTimeout: 30s # dataset lookups and listings
     maxConcurrent: 4 # reads at once, per app
+  # App writes through booth-api (ADR 0117; docs/design-app-writes.md). An owner declares in an
+  # app's Write targets which booth-api APIs it may write to, and also grants the app on booth-api's
+  # own API page; a write needs both. Turning this on:
+  #   - serves the write proxy (booth_streamlit.api) on the internal port: an app's writes go to
+  #     booth-api's /modules/api/app/v1/... through booth-core's gateway, with the app's own token;
+  #   - shows the Write targets panel to owners, and every target in the app's header to viewers;
+  #   - closes egress for every app with a write target (the per-app label below);
+  #   - makes take ownership revoke the app's grants in booth-api first, and fail if it can't.
+  # Needs booth-api installed (v with app writes) and trusting booth-core's workload-token issuer.
+  writes:
+    enabled: false
   # Test knob: re-mint tokens and re-fetch them in app pods at least this often (e.g. 20s), so a lost
   # owner is noticed in seconds. Empty (the default): two thirds of a token's life (~6.7 minutes).
   refreshMax: ""

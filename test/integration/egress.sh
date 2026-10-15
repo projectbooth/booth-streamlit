@@ -60,11 +60,14 @@ process.stdout.write(JSON.stringify({
   "booth-core pod :8080": [core, 8080], "booth-core Service ClusterIP :8080": [svc, 8080],
   "another namespace pod (keycloak) :8080": [kc, 8080], "the node kubelet :10250": [node, 10250],
   "this module backend :8080 (only 8081 is allowed)": [backend, 8080]}))' "$core_pod" "$core_svc" "$kc_pod" "$node_ip" "$backend_pod")
-allowed=$(node -e '
+allowed_targets() {
+  node -e '
 const [backend, pg, minio, pypi] = process.argv.slice(1);
 process.stdout.write(JSON.stringify({
   "the internet (1.1.1.1:443)": ["1.1.1.1", 443], "backend internal :8081": [backend, 8081],
-  "booth-database postgres :5432": [pg, 5432], "minio :9000": [minio, 9000], "package index :8080": [pypi, 8080]}))' "$backend_pod" "$pg_pod" "$minio_pod" "$pypi_pod")
+  "booth-database postgres :5432": [pg, 5432], "minio :9000": [minio, 9000], "package index :8080": [pypi, 8080]}))' "$backend_pod" "$pg_pod" "$minio_pod" "$pypi_pod"
+}
+allowed=$(allowed_targets)
 spec() { node -e 'process.stdout.write(JSON.stringify({targets: JSON.parse(process.argv[1]), dns: "example.com", timeout: 5}))' "$1"; }
 
 from_app() { # TARGETS-JSON: the probe's JSON, from the app's Streamlit container
@@ -133,7 +136,9 @@ each "$c" "$lan" '^open$' "control (unrestricted pod connects): "
 
 # Not `kubectl ... | grep -q`: under pipefail, grep exiting at its first match can SIGPIPE kubectl
 # and fail the pipeline even though the line matched (run 38272867963 lost a check that way).
-apps_policy_has_internet() { grep -q "0.0.0.0/0" <<<"$(kubectl -n "$ns" get networkpolicy booth-streamlit-apps -o yaml)"; }
+# The internet rule is its own policy (ADR 0117 item 7), selecting app pods labelled egress=open;
+# with apps.egress.mode=closed it isn't rendered at all.
+apps_policy_has_internet() { grep -q "0.0.0.0/0" <<<"$(kubectl -n "$ns" get networkpolicy booth-streamlit-apps-egress-open -o yaml 2>/dev/null || true)"; }
 
 step "apps.egress.mode=closed: the internet is dropped too; DNS and the explicit rules still work"
 helm get values booth-streamlit -n "$ns" -o json >/tmp/egress-values.json
@@ -143,6 +148,12 @@ v.apps.egress = Object.assign({}, v.apps.egress, {mode: "closed"});
 fs.writeFileSync("/tmp/egress-values-closed.json", JSON.stringify(v));'
 helm upgrade booth-streamlit "$repo/charts/booth-streamlit" -n "$ns" -f /tmp/egress-values-closed.json >/dev/null
 kubectl -n "$ns" rollout status deploy/booth-streamlit --timeout=300s >/dev/null
+# The backend gets the mode as BOOTH_APP_EGRESS_MODE, so the upgrade replaces its pod: probe the
+# new pod's address, not the one resolved at the start.
+backend_pod=$(ep "$ns" booth-streamlit)
+[ -n "$backend_pod" ] || fail "no address for the new backend pod"
+allowed=$(allowed_targets)
+echo "backend pod after the upgrade: $backend_pod"
 # The policy, not the pod, changes: wait until the app-pods policy has no internet rule.
 for _ in $(seq 1 30); do apps_policy_has_internet || break; sleep 1; done
 apps_policy_has_internet && fail "the closed-mode policy still has the internet rule"

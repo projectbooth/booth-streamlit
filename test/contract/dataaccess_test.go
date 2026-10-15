@@ -62,17 +62,10 @@ func TestChart_DataAccessManifestAndBackend(t *testing.T) {
 
 // The internal port admits app pods only; app pods may reach it, and booth-database only when enabled.
 func TestChart_DataAccessNetworkPolicies(t *testing.T) {
-	pols := docs(t, "NetworkPolicy", dataOn...)
-	if len(pols) != 2 {
-		t.Fatalf("want the app policy and the backend policy, got %d", len(pols))
-	}
-	var backend, app map[string]any
-	for _, p := range pols {
-		if strings.HasSuffix(p["metadata"].(map[string]any)["name"].(string), "-backend") {
-			backend = p["spec"].(map[string]any)
-		} else {
-			app = p["spec"].(map[string]any)
-		}
+	pols := policiesByName(t, dataOn...)
+	backend, app := pols["booth-streamlit-backend"], pols["booth-streamlit-apps"]
+	if len(pols) != 3 || backend == nil || app == nil || pols["booth-streamlit-apps-egress-open"] == nil {
+		t.Fatalf("want the app, open-egress and backend policies, got %v", pols)
 	}
 	ing := backend["ingress"].([]any)
 	if len(ing) != 2 {
@@ -152,5 +145,23 @@ func TestChart_Lakehouse(t *testing.T) {
 	args := append([]string{"template", "booth-streamlit", chartDir()}, lake...)
 	if out, err := helm(t, append(args, "--set", "dataAccess.lakehouse.egress.podSelector.app=minio")...); err == nil {
 		t.Errorf("a podSelector without a namespaceSelector rendered:\n%s", out)
+	}
+}
+
+// ADR 0117: app writes are off unless dataAccess.writes.enabled, which reaches the backend; the
+// release's egress mode reaches it too, so the editor can say a write target closes the app's egress.
+func TestChart_AppWritesSwitch(t *testing.T) {
+	envOf := func(args ...string) string { return string(helmTemplate(t, "templates/deployment.yaml", args...)) }
+	if dep := envOf(dataOn...); !regexp.MustCompile(`BOOTH_APP_WRITES\s+value: "false"`).MatchString(dep) {
+		t.Error("app writes must default to off")
+	}
+	if dep := envOf(append(dataOn, "--set", "dataAccess.writes.enabled=true")...); !regexp.MustCompile(`BOOTH_APP_WRITES\s+value: "true"`).MatchString(dep) {
+		t.Error("dataAccess.writes.enabled doesn't reach the backend")
+	}
+	if dep := envOf(); strings.Contains(dep, "BOOTH_APP_WRITES") {
+		t.Error("app writes rendered without data access")
+	}
+	if dep := envOf("--set", "apps.egress.mode=closed"); !regexp.MustCompile(`BOOTH_APP_EGRESS_MODE\s+value: "closed"`).MatchString(dep) {
+		t.Error("the egress mode doesn't reach the backend")
 	}
 }
