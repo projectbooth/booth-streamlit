@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { api, appURL, type App as BoothApp, type Me } from "./api";
+import { api, appURL, changesData, type App as BoothApp, type Me } from "./api";
 import { AppEditor } from "./AppEditor";
 import { ErrorText, SHARED_DATA_WORDING, TrustNote, WritesHeader, targetsWording } from "./components";
 import { useAsync } from "./useAsync";
 
 // One page, no client-side routes: every API URL is relative to this page's own path, so it must
 // stay at the module root (/iframe/streamlit/). Opening an app navigates the frame to apps/<id>/,
-// except an app that can write (ADR 0117): that one opens at #app=<id>, this page with the
+// except an app that can write or upload (ADR 0117): that one opens at #app=<id>, this page with the
 // app in a frame under a header that says what it can change.
 type View = { kind: "list" } | { kind: "new" } | { kind: "edit"; id: string };
 
@@ -17,8 +17,8 @@ function framedApp(): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-/** Where an app opens: in the frame with the header if it can write, otherwise directly. */
-export const openURL = (a: BoothApp) => ((a.writeTargets?.length ?? 0) > 0 ? frameHash(a.id) : appURL(a.id));
+/** Where an app opens: in the frame with the header if it can write or upload, otherwise directly. */
+export const openURL = (a: BoothApp) => (changesData(a) ? frameHash(a.id) : appURL(a.id));
 
 export function App() {
   const [me] = useAsync(api.me, []);
@@ -54,9 +54,10 @@ function AppFrame({ id }: { id: string }) {
   if (app.status === "loading") return <Shell><p className="text-sm">Loading…</p></Shell>;
   if (app.status === "error") return <Shell><ErrorText error={app.error} /></Shell>;
   const targets = app.data.writeTargets ?? [];
+  const uploads = app.data.uploadTargets ?? [];
   return (
     <div className="flex h-screen flex-col bg-white dark:bg-gray-950">
-      {targets.length > 0 && <WritesHeader targets={targets} />}
+      {changesData(app.data) && <WritesHeader targets={targets} uploads={uploads} />}
       {/* The backend sends every other page load of this app here; it knows this frame by its
           referrer, so the policy is set rather than left to the defaults. */}
       <iframe title={app.data.name} src={appURL(id)} referrerPolicy="same-origin" className="w-full flex-1 border-0" />
@@ -147,14 +148,14 @@ function AppRow({ app, me, onEdit, act }: { app: BoothApp; me: Me; onEdit: () =>
             {app.shared && <> · {SHARED_DATA_WORDING}</>}
           </p>
         )}
-        {(app.writeTargets?.length ?? 0) > 0 && (
-          <p className="text-xs text-sky-900 dark:text-sky-200">Can write to: {targetsWording(app.writeTargets ?? [])}</p>
+        {changesData(app) && (
+          <p className="text-xs text-sky-900 dark:text-sky-200">Can write to: {targetsWording(app.writeTargets ?? [], app.uploadTargets ?? [])}</p>
         )}
         {me.dataAccess && paused && (
           <p className="text-sm text-amber-900 dark:text-amber-200">
             Data access paused: {app.dataPausedReason}
             {canAuthor && " A workspace owner can take ownership to restore it."}
-            {canAuthor && (app.writeTargets?.length ?? 0) > 0 && " Taking ownership clears its write targets and revokes its write grants in the API module."}
+            {canAuthor && changesData(app) && " Taking ownership clears its write and upload targets and revokes its grants in the API and Storage modules."}
           </p>
         )}
         {canAuthor && app.status?.state === "failed" && app.status.reason && (

@@ -195,6 +195,22 @@ dataAccess:
   # Needs booth-api installed (v with app writes) and trusting booth-core's workload-token issuer.
   writes:
     enabled: false
+  # App uploads to booth-storage (ADR 0117 items 6 and 7; booth-storage's
+  # docs/contracts/upload-grants.md). An owner declares in the same Write targets panel which Storage
+  # folders an app may add files to, and also grants the app on Storage's Admin page (App uploads),
+  # which sets the allowed extensions and the size cap; an upload needs both. Turning this on:
+  #   - serves the upload proxy (booth_streamlit.files.upload) on the internal port: one create-only
+  #     PUT (If-None-Match: *) to booth-storage through booth-core's gateway, with the app's own
+  #     token, named {folder}{UTC time}-{6 random}-{name}; no overwrite, delete or listing;
+  #   - shows upload targets in the Write targets panel, and in the app's header;
+  #   - closes egress for every app with an upload target, as for writes;
+  #   - makes take ownership revoke the app's upload grants in booth-storage too, and fail if it can't.
+  # Needs booth-storage v0.1.3 or later, trusting booth-core's workload-token issuer.
+  uploads:
+    enabled: false
+    # This module's own ceiling on one upload. The grant's maxBytes is the real limit per folder;
+    # this only bounds what the backend streams at all.
+    maxBytes: 536870912 # 512 MiB
   # Test knob: re-mint tokens and re-fetch them in app pods at least this often (e.g. 20s), so a lost
   # owner is noticed in seconds. Empty (the default): two thirds of a token's life (~6.7 minutes).
   refreshMax: ""

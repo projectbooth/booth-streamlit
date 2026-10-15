@@ -57,7 +57,11 @@ type App struct {
 	// may write to and how. booth-api holds the grant itself; a write needs both. Every viewer sees
 	// it in the app's header. An app with any target runs with egress closed.
 	WriteTargets []WriteTarget `json:"writeTargets"`
-	// WriteTargetsBy is the owner who last confirmed the declaration, at WriteTargetsAt.
+	// UploadTargets is the app-side upload declaration (ADR 0117 items 1a and 6): the booth-storage
+	// folders the app may add files to. booth-storage holds the grant itself; an upload needs both.
+	// Shown in the header like WriteTargets, and it closes the app's egress the same way.
+	UploadTargets []UploadTarget `json:"uploadTargets"`
+	// WriteTargetsBy is the owner who last confirmed the declaration (both kinds), at WriteTargetsAt.
 	WriteTargetsBy string     `json:"writeTargetsBy,omitempty"`
 	WriteTargetsAt *time.Time `json:"writeTargetsAt,omitempty"`
 	CreatedBy      string     `json:"createdBy"`
@@ -106,7 +110,7 @@ var (
 	ErrConfirmationRequired = errors.New("confirm that anyone who can open this app may write through it")
 	// ErrRevokeFailed: take ownership could not revoke the app's write grants, so the owner did not
 	// change (ADR 0117 item 1a: fail closed).
-	ErrRevokeFailed = errors.New("the app's write grants could not be revoked, so ownership did not change; try again")
+	ErrRevokeFailed = errors.New("the app's write or upload grants could not be revoked, so ownership did not change; try again")
 	// ErrNotPaused: take ownership is only for an app whose owner lost access (ADR 0107 item 7).
 	ErrNotPaused = errors.New("this app's owner still has access; take ownership is only for an app whose data access is paused")
 )

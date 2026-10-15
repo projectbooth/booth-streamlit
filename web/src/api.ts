@@ -16,7 +16,9 @@ export interface Me {
   catalogSources?: boolean;
   /** Whether this install turns on app writes through booth-api (ADR 0117). */
   writes?: boolean;
-  /** Whether the release's app egress is open, so declaring a write target closes this app's. */
+  /** Whether this install turns on app uploads to booth-storage (ADR 0117). */
+  uploads?: boolean;
+  /** Whether the release's app egress is open, so declaring a write or upload target closes this app's. */
   egressOpen?: boolean;
 }
 
@@ -26,6 +28,12 @@ export type WriteOperation = "insert" | "update" | "delete";
 export interface WriteTarget {
   api: string;
   operations: WriteOperation[];
+}
+
+/** One Storage folder an app may add files to (ADR 0117): a backend id and a prefix ("" or ending in "/"). */
+export interface UploadTarget {
+  backend: string;
+  prefix: string;
 }
 
 /** A catalog dataset an owner may declare as an app's source. */
@@ -55,6 +63,8 @@ export interface App {
   dataPausedReason?: string;
   /** The owner's write declaration: shown to every viewer above the app (ADR 0117). */
   writeTargets?: WriteTarget[];
+  /** The owner's upload declaration: shown with the write targets (ADR 0117). */
+  uploadTargets?: UploadTarget[];
   /** What the lifecycle observes (internal/lifecycle). */
   status: { state: "stopped" | "suspended" | "starting" | "installing" | "running" | "failed"; reason?: string };
   createdBy: string;
@@ -103,9 +113,9 @@ export const api = {
   start: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/start`),
   takeOwnership: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/take-ownership`),
   stop: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/stop`),
-  /** Replace the app's write declaration; adding a target or an operation needs confirmed. */
-  setWriteTargets: (id: string, targets: WriteTarget[], confirmed: boolean) =>
-    call<App>("PUT", `api/apps/${encodeURIComponent(id)}/write-targets`, { targets, confirmed }),
+  /** Replace the app's write and upload declaration; adding a target, operation or folder needs confirmed. */
+  setWriteTargets: (id: string, targets: WriteTarget[], uploads: UploadTarget[], confirmed: boolean) =>
+    call<App>("PUT", `api/apps/${encodeURIComponent(id)}/write-targets`, { targets, uploads, confirmed }),
   /** Catalog datasets readable by the caller (an owner), for declaring sources. */
   datasets: () => call<{ datasets: Dataset[]; total: number }>("GET", "api/catalog/datasets"),
 };
@@ -122,3 +132,20 @@ export const principalOf = (workspace: string, id: string) => `streamlit:${works
  */
 export const grantURL = (workspace: string, id: string, apiSlug: string) =>
   `/apis?${new URLSearchParams({ writeApi: apiSlug, writePrincipal: principalOf(workspace, id) }).toString()}`;
+
+/**
+ * booth-storage's Admin page in the shell, on its App uploads panel, with the app's principal, the
+ * backend and the folder filled in (booth-storage docs/contracts/upload-grants.md, "URL prefill").
+ * The path is booth-storage's adminNavPath. Opened in the top window, like grantURL.
+ */
+export const uploadGrantURL = (workspace: string, id: string, t: UploadTarget) =>
+  `/storage/admin?${new URLSearchParams({ panel: "upload-grants", principal: principalOf(workspace, id), backendId: t.backend, prefix: t.prefix }).toString()}`;
+
+/** A folder as the backend stores it (internal/apps CleanUploadPrefix): no leading "/", "" or ending in "/". */
+export const cleanPrefix = (p: string) => {
+  const s = p.trim().replace(/^\/+/, "").replace(/\/+$/, "");
+  return s === "" ? "" : s + "/";
+};
+
+/** Whether an app declares anything it can change: it then opens under the header and has no internet. */
+export const changesData = (a: App) => (a.writeTargets?.length ?? 0) + (a.uploadTargets?.length ?? 0) > 0;

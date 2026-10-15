@@ -12,21 +12,32 @@ import (
 	"time"
 )
 
-// GrantsSubject is the identity this module revokes an app's write grants with (ADR 0117 item 1a):
+// GrantsSubject is the identity this module revokes an app's grants with (ADR 0117 item 1a):
 // streamlit:<workspace>:grants. App ids start with "a" and are 13 characters, so it can never be an
-// app's subject. booth-api accepts a token with this subject on revoke-principal only, and only
-// for principals streamlit:<workspace>:* in the token's workspace.
+// app's subject. booth-api and booth-storage accept a token with this subject on revoke-principal
+// only, and only for principals streamlit:<workspace>:* in the token's workspace.
 func GrantsSubject(workspace string) string { return "streamlit:" + workspace + ":grants" }
 
-// GrantRevoker revokes an app's write grants in booth-api on take ownership (apps.GrantRevoker). It
-// mints its own viewer-capped token under the owner taking the app over, and calls booth-api's
-// POST /api/write-grants/revoke-principal through core's gateway. Anything but a 2xx answer is an
-// error, and take ownership then fails closed.
+// The revoke-principal routes, through core's gateway (ADR 0117 item 1a). Both take
+// {"principal": "streamlit:<ws>:<appId>"} and answer {"revoked": n, ...}.
+const (
+	APIRevokePath     = "/modules/api/api/write-grants/revoke-principal"            // booth-api: write grants
+	StorageRevokePath = "/modules/storage/api/admin/upload-grants/revoke-principal" // booth-storage: upload grants
+)
+
+// GrantRevoker revokes an app's grants in one module on take ownership (apps.GrantRevoker):
+// booth-api's write grants, or booth-storage's upload grants. It mints its own viewer-capped token
+// under the owner taking the app over, and calls the module's revoke-principal route through core's
+// gateway.
+// Anything but a 2xx answer is an error, and take ownership then fails closed.
 type GrantRevoker struct {
 	GatewayURL string
-	Minter     Minter
-	Timeout    time.Duration
-	HTTP       *http.Client
+	// Module names the module in errors and logs; Path is its revoke route. Empty means booth-api.
+	Module  string
+	Path    string
+	Minter  Minter
+	Timeout time.Duration
+	HTTP    *http.Client
 }
 
 // RevokeGrants implements apps.GrantRevoker.
@@ -44,8 +55,12 @@ func (g *GrantRevoker) RevokeGrants(ctx context.Context, workspace, principal, a
 	if tok.Role != RoleCeiling {
 		return ErrRoleExceeded
 	}
+	module, path := g.Module, g.Path
+	if path == "" {
+		module, path = "booth-api", APIRevokePath
+	}
 	body, _ := json.Marshal(map[string]string{"principal": principal})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.GatewayURL, "/")+"/modules/api/api/write-grants/revoke-principal", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.GatewayURL, "/")+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -58,7 +73,7 @@ func (g *GrantRevoker) RevokeGrants(ctx context.Context, workspace, principal, a
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("booth-api could not be reached: %w", err)
+		return fmt.Errorf("%s could not be reached: %w", module, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -67,12 +82,12 @@ func (g *GrantRevoker) RevokeGrants(ctx context.Context, workspace, principal, a
 		if len(msg) > 300 {
 			msg = msg[:300]
 		}
-		return fmt.Errorf("booth-api answered %d: %s", resp.StatusCode, msg)
+		return fmt.Errorf("%s answered %d: %s", module, resp.StatusCode, msg)
 	}
 	var out struct {
 		Revoked int `json:"revoked"`
 	}
 	_ = json.Unmarshal(raw, &out)
-	log.Printf("write grants revoked: workspace=%s principal=%s revoked=%d by=%s", workspace, principal, out.Revoked, actingOwner)
+	log.Printf("grants revoked: module=%s workspace=%s principal=%s revoked=%d by=%s", module, workspace, principal, out.Revoked, actingOwner)
 	return nil
 }

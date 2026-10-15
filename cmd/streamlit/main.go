@@ -101,11 +101,21 @@ func run() error {
 				MaxConcurrent:  cfg.Data.FilesMaxConcurrent,
 			},
 		}
+		// App writes and uploads (ADR 0117): the write proxy to booth-api and the upload proxy to
+		// booth-storage, through core's gateway with each app's own token, and the grant revokes
+		// that take ownership needs (fails closed if either can't be made).
+		minter := &dataaccess.CoreMinter{URL: cfg.Data.MintURL, Credential: cfg.Data.MintCredential}
+		var revokers apps.Revokers
 		if cfg.Data.Writes {
-			// App writes (ADR 0117): the write proxy to booth-api through core's gateway, with each
-			// app's own token, and the grant revoke that take ownership needs (fails closed).
 			in.Writes = &dataaccess.Writes{GatewayURL: cfg.Data.CoreURL}
-			svc.Revoker = &dataaccess.GrantRevoker{GatewayURL: cfg.Data.CoreURL, Minter: &dataaccess.CoreMinter{URL: cfg.Data.MintURL, Credential: cfg.Data.MintCredential}}
+			revokers = append(revokers, &dataaccess.GrantRevoker{GatewayURL: cfg.Data.CoreURL, Module: "booth-api", Path: dataaccess.APIRevokePath, Minter: minter})
+		}
+		if cfg.Data.Uploads {
+			in.Uploads = &dataaccess.Uploads{GatewayURL: cfg.Data.CoreURL, MaxBytes: cfg.Data.UploadsMaxBytes}
+			revokers = append(revokers, &dataaccess.GrantRevoker{GatewayURL: cfg.Data.CoreURL, Module: "booth-storage", Path: dataaccess.StorageRevokePath, Minter: minter})
+		}
+		if len(revokers) > 0 {
+			svc.Revoker = revokers
 		}
 		internal := &http.Server{Addr: cfg.Data.InternalAddr, Handler: in.Router(), ReadHeaderTimeout: 10 * time.Second}
 		go func() {
@@ -136,7 +146,7 @@ func run() error {
 		Handler: api.NewRouter(api.Deps{
 			DB: pool, Bus: bus, Outbox: store, Datasets: datasets, Web: api.WebDir(cfg.WebDir),
 			Verifier: verifier, Apps: svc, Status: ctrl.Status, DataAccess: cfg.Data.Enabled,
-			Writes: cfg.Data.Enabled && cfg.Data.Writes, EgressOpen: cfg.Lifecycle.EgressOpen,
+			Writes: cfg.Data.Enabled && cfg.Data.Writes, Uploads: cfg.Data.Enabled && cfg.Data.Uploads, EgressOpen: cfg.Lifecycle.EgressOpen,
 			Proxy: &proxy.Handler{
 				Verifier:     verifier,
 				Apps:         resolver,
@@ -208,6 +218,7 @@ func newLifecycle(ctx context.Context, l config.Lifecycle, d config.Data, svc *a
 			BrokerURL:        strings.TrimRight(d.InternalURL, "/") + "/internal/broker",
 			FilesURL:         strings.TrimRight(d.InternalURL, "/"),
 			Writes:           d.Writes,
+			Uploads:          d.Uploads,
 			SidecarImage:     d.SidecarImage,
 			SidecarResources: sideRes,
 			Database:         d.Database,

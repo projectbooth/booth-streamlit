@@ -66,8 +66,10 @@ type Deps struct {
 	DataAccess bool
 	// Writes: app writes through booth-api are on (ADR 0117; needs DataAccess).
 	Writes bool
+	// Uploads: app uploads to booth-storage are on (ADR 0117; needs DataAccess).
+	Uploads bool
 	// EgressOpen: the release's apps.egress.mode is open, so the editor says that declaring a
-	// write target closes this app's egress.
+	// write or upload target closes this app's egress.
 	EgressOpen bool
 }
 

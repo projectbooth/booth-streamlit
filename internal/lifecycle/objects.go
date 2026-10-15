@@ -101,11 +101,11 @@ func labels(a apps.App) map[string]string {
 	}
 }
 
-// egressLabel is an app pod's egress: closed for an app with any write target (ADR 0117 item 7:
-// app code that can change platform data gets no internet), open otherwise. Whether open means
-// anything is the chart's apps.egress.mode.
+// egressLabel is an app pod's egress: closed for an app with any write or upload target (ADR 0117
+// item 7: app code that can change platform data gets no internet), open otherwise. Whether open
+// means anything is the chart's apps.egress.mode.
 func egressLabel(a apps.App) string {
-	if a.Writes() {
+	if a.ChangesData() {
 		return "closed"
 	}
 	return "open"
@@ -278,8 +278,8 @@ func deployment(cfg Config, a apps.App, wh *Warehouse) *appsv1.Deployment {
 // regular containers, never to this one.
 func addPip(cfg Config, a apps.App, spec *corev1.PodSpec, sc corev1.SecurityContext) {
 	pip := cfg.Pip
-	// An app with write targets has no internet: only an in-cluster index can serve it.
-	egressClosed := pip.EgressClosed || (a.Writes() && !pip.IndexEgress)
+	// An app with write or upload targets has no internet: only an in-cluster index can serve it.
+	egressClosed := pip.EgressClosed || (a.ChangesData() && !pip.IndexEgress)
 	size := resource.MustParse(pip.SiteSizeLimit)
 	spec.Volumes = append(spec.Volumes, corev1.Volume{
 		Name:         "site",
@@ -437,6 +437,10 @@ func addDataAccess(cfg Config, a apps.App, spec *corev1.PodSpec, sc corev1.Secur
 					// The write proxy, through the gate on loopback (booth_streamlit.api), only for an
 					// app with declared write targets.
 					c.Env = append(c.Env, corev1.EnvVar{Name: "BOOTH_WRITES_URL", Value: "http://" + statusAddr + "/writes"})
+				}
+				if data.Uploads && a.Uploads() {
+					// The upload proxy, likewise (booth_streamlit.files.upload).
+					c.Env = append(c.Env, corev1.EnvVar{Name: "BOOTH_UPLOADS_URL", Value: "http://" + statusAddr + "/uploads"})
 				}
 			}
 			if data.Database {

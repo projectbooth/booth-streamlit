@@ -969,3 +969,40 @@ func TestDeployment_WritesURLOnlyForAnAppThatWrites(t *testing.T) {
 		t.Errorf("BOOTH_WRITES_URL=%q for an app with no write targets", got)
 	}
 }
+
+// An upload target closes the app's egress like a write target (ADR 0117 item 7), and the upload
+// proxy URL reaches the Streamlit container only for an app with upload targets, and only when the
+// install turns app uploads on.
+func TestDeployment_UploadTargetsCloseEgressAndGetTheUploadsURL(t *testing.T) {
+	r := dataRig(t)
+	a := r.create("Finance")
+	env := func() (label, url string) {
+		r.reconcile()
+		d := r.deployment(a.ID)
+		for _, e := range container(t, d, "streamlit").Env {
+			if e.Name == "BOOTH_UPLOADS_URL" {
+				url = e.Value
+			}
+		}
+		return d.Spec.Template.Labels[LabelEgress], url
+	}
+	if label, _ := env(); label != "open" {
+		t.Fatalf("egress label %q before any target", label)
+	}
+	if _, err := r.svc.SetWriteTargets(r.ctx, owner, a.ID, apps.WriteTargetsInput{Uploads: []apps.UploadTarget{{Backend: "local", Prefix: "inbox/"}}, Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	if label, url := env(); label != "closed" || url != "" {
+		t.Errorf("uploads off in the install: egress %q, BOOTH_UPLOADS_URL=%q (want closed, none)", label, url)
+	}
+	r.c.cfg.Data.Uploads = true
+	if label, url := env(); label != "closed" || url != "http://127.0.0.1:8090/uploads" {
+		t.Errorf("egress %q, BOOTH_UPLOADS_URL=%q, want closed and the gate's loopback /uploads", label, url)
+	}
+	if _, err := r.svc.SetWriteTargets(r.ctx, owner, a.ID, apps.WriteTargetsInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if label, url := env(); label != "open" || url != "" {
+		t.Errorf("after removing it: egress %q, BOOTH_UPLOADS_URL=%q", label, url)
+	}
+}

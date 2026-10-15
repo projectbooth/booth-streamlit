@@ -32,11 +32,11 @@ type Store interface {
 	// SetDataPaused records (reason != "") or clears (reason == "") a data-access pause; bumpEpoch
 	// also bumps DataEpoch so the pod rolls. It returns the app as stored.
 	SetDataPaused(ctx context.Context, workspace, id, reason string, at time.Time, bumpEpoch bool) (App, error)
-	// SetWriteTargets replaces the app's write declaration (nil clears it), recording who and when.
-	// It returns the app as stored.
-	SetWriteTargets(ctx context.Context, workspace, id string, targets []WriteTarget, by string, at time.Time) (App, error)
-	// TakeOwnership sets Owner to newOwner, clears any pause and the write declaration, and records
-	// the change, atomically.
+	// SetTargets replaces the app's write and upload declaration (nil clears a kind), recording who
+	// and when. It returns the app as stored.
+	SetTargets(ctx context.Context, workspace, id string, writes []WriteTarget, uploads []UploadTarget, by string, at time.Time) (App, error)
+	// TakeOwnership sets Owner to newOwner, clears any pause and the write and upload declaration,
+	// and records the change, atomically.
 	TakeOwnership(ctx context.Context, workspace, id, newOwner, reason string, at time.Time) (previous string, err error)
 	// OwnershipChanges lists an app's recorded take-overs, oldest first.
 	OwnershipChanges(ctx context.Context, workspace, id string) ([]OwnershipChange, error)
@@ -196,6 +196,9 @@ func (m *MemoryStore) Create(_ context.Context, a App) error {
 	if a.WriteTargets == nil {
 		a.WriteTargets = []WriteTarget{}
 	}
+	if a.UploadTargets == nil {
+		a.UploadTargets = []UploadTarget{}
+	}
 	m.apps[a.ID] = a
 	m.writeEvents(dashboardEvents(nil, &a))
 	return nil
@@ -310,21 +313,22 @@ func (m *MemoryStore) TakeOwnership(_ context.Context, workspace, id, newOwner, 
 	}
 	prev, before := cur.Owner, cur
 	cur.Owner, cur.DataPausedReason, cur.DataPausedAt = newOwner, "", nil
-	cur.WriteTargets, cur.WriteTargetsBy, cur.WriteTargetsAt = []WriteTarget{}, newOwner, &at
+	cur.WriteTargets, cur.UploadTargets, cur.WriteTargetsBy, cur.WriteTargetsAt = []WriteTarget{}, []UploadTarget{}, newOwner, &at
 	m.apps[id] = cur
 	m.writeEvents(dashboardEvents(&before, &cur))
 	m.changes = append(m.changes, OwnershipChange{AppID: id, Workspace: workspace, PreviousOwner: prev, NewOwner: newOwner, Reason: reason, At: at})
 	return prev, nil
 }
 
-func (m *MemoryStore) SetWriteTargets(_ context.Context, workspace, id string, targets []WriteTarget, by string, at time.Time) (App, error) {
+func (m *MemoryStore) SetTargets(_ context.Context, workspace, id string, writes []WriteTarget, uploads []UploadTarget, by string, at time.Time) (App, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cur, ok := m.apps[id]
 	if !ok || cur.Workspace != workspace {
 		return App{}, ErrNotFound
 	}
-	cur.WriteTargets = append([]WriteTarget{}, targets...)
+	cur.WriteTargets = append([]WriteTarget{}, writes...)
+	cur.UploadTargets = append([]UploadTarget{}, uploads...)
 	cur.WriteTargetsBy = by
 	t := at
 	cur.WriteTargetsAt = &t
