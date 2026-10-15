@@ -460,6 +460,43 @@ func TestAppAPI_WriteTargets(t *testing.T) {
 	}
 }
 
+// ADR 0117 phase 2: upload targets are part of the same declaration; each kind needs its own
+// switch in the install, and the route exists while either is on.
+func TestAppAPI_UploadTargets(t *testing.T) {
+	h := newHarness(t)
+	shared, _ := h.seed()
+	owner := h.as(ownerSub, "acme", identity.RoleOwner)
+	path := "/api/apps/" + shared.ID + "/write-targets"
+	uploads := []map[string]any{{"backend": "local", "prefix": "finance/inbox"}}
+	writes := []map[string]any{{"api": "household", "operations": []string{"insert"}}}
+
+	h.h = NewRouter(Deps{DB: fakeDB{}, Verifier: h.verifier(), Apps: h.svc, DataAccess: true, Uploads: true})
+	if code, body := h.do(http.MethodGet, "/api/me", owner, nil); code != 200 || body["uploads"] != true || body["writes"] != false {
+		t.Errorf("me: %d %v", code, body)
+	}
+	if code, body := h.do(http.MethodPut, path, owner, map[string]any{"uploads": uploads}); code != 400 || !strings.Contains(fmt.Sprint(body["error"]), "confirm") {
+		t.Errorf("unconfirmed: %d %v", code, body)
+	}
+	if code, body := h.do(http.MethodPut, path, owner, map[string]any{"targets": writes, "uploads": uploads, "confirmed": true}); code != 400 || !strings.Contains(fmt.Sprint(body["error"]), "writes are not enabled") {
+		t.Errorf("a write target with only uploads on: %d %v", code, body)
+	}
+	if code, _ := h.do(http.MethodPut, path, h.as(viewerSub, "acme", identity.RoleViewer), map[string]any{"uploads": uploads, "confirmed": true}); code != 403 && code != 404 {
+		t.Errorf("viewer declared: %d", code)
+	}
+	code, body := h.do(http.MethodPut, path, owner, map[string]any{"uploads": uploads, "confirmed": true})
+	if code != 200 || !reflect.DeepEqual(body["uploadTargets"], []any{map[string]any{"backend": "local", "prefix": "finance/inbox/"}}) {
+		t.Fatalf("confirmed: %d %v", code, body)
+	}
+	_, list := h.do(http.MethodGet, "/api/apps", h.as(viewerSub, "acme", identity.RoleViewer), nil)
+	if got := list["apps"].([]any)[0].(map[string]any)["uploadTargets"]; !reflect.DeepEqual(got, body["uploadTargets"]) {
+		t.Errorf("viewer's list shows %v", got)
+	}
+	h.h = NewRouter(Deps{DB: fakeDB{}, Verifier: h.verifier(), Apps: h.svc, DataAccess: true, Writes: true})
+	if code, body := h.do(http.MethodPut, path, owner, map[string]any{"uploads": uploads, "confirmed": true}); code != 400 || !strings.Contains(fmt.Sprint(body["error"]), "uploads are not enabled") {
+		t.Errorf("an upload target with only writes on: %d %v", code, body)
+	}
+}
+
 type failingRevoker struct{}
 
 func (failingRevoker) RevokeGrants(context.Context, string, string, string) error {

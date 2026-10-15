@@ -197,7 +197,7 @@ helm upgrade --install booth-streamlit "$repo/charts/booth-streamlit" --namespac
   --set apps.imagePullPolicy=Never \
   --set apps.maxRunning=1 --set apps.idleTimeout=60s \
   --set dataAccess.enabled=true --set dataAccess.database.enabled=true --set dataAccess.refreshMax=20s \
-  --set dataAccess.writes.enabled=true \
+  --set dataAccess.writes.enabled=true --set dataAccess.uploads.enabled=true \
   --set dataAccess.lakehouse.enabled=true --set dataAccess.lakehouse.egress.podSelector.app=minio \
   --set 'dataAccess.lakehouse.egress.namespaceSelector.kubernetes\.io/metadata\.name=booth-minio' \
   --set apps.pip.indexUrl=http://pypi.booth-pypi.svc:8080/simple --set apps.pip.trustedHost=pypi.booth-pypi.svc \

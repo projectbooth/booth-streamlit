@@ -49,7 +49,7 @@ func stores(t *testing.T) map[string]Store {
 
 func app(id, ws, name string, shared bool) App {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
-	return App{ID: id, Workspace: ws, Name: name, Source: "src-" + id, Sources: []string{}, WriteTargets: []WriteTarget{}, Shared: shared, DesiredState: Stopped, GateBearer: "bearer-" + id,
+	return App{ID: id, Workspace: ws, Name: name, Source: "src-" + id, Sources: []string{}, WriteTargets: []WriteTarget{}, UploadTargets: []UploadTarget{}, Shared: shared, DesiredState: Stopped, GateBearer: "bearer-" + id,
 		CreatedBy: "o", CreatedAt: now, UpdatedBy: "o", UpdatedAt: now}
 }
 
@@ -195,22 +195,23 @@ func TestStores_WriteTargets(t *testing.T) {
 			}
 			at := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
 			want := []WriteTarget{{API: "household", Operations: []string{"insert", "update"}}, {API: "notes", Operations: []string{"insert"}}}
-			got, err := s.SetWriteTargets(ctx, "acme", "w1", want, "alice", at)
-			if err != nil || !reflect.DeepEqual(got.WriteTargets, want) || got.WriteTargetsBy != "alice" || got.WriteTargetsAt == nil || !got.WriteTargetsAt.Equal(at) {
-				t.Fatalf("SetWriteTargets: %+v %v", got, err)
+			ups := []UploadTarget{{Backend: "local", Prefix: "finance/inbox/"}}
+			got, err := s.SetTargets(ctx, "acme", "w1", want, ups, "alice", at)
+			if err != nil || !reflect.DeepEqual(got.WriteTargets, want) || !reflect.DeepEqual(got.UploadTargets, ups) || got.WriteTargetsBy != "alice" || got.WriteTargetsAt == nil || !got.WriteTargetsAt.Equal(at) {
+				t.Fatalf("SetTargets: %+v %v", got, err)
 			}
 			// Read back by every path the proxy and the lifecycle use.
-			if g, _ := s.Get(ctx, "acme", "w1"); !reflect.DeepEqual(g.WriteTargets, want) {
+			if g, _ := s.Get(ctx, "acme", "w1"); !reflect.DeepEqual(g.WriteTargets, want) || !reflect.DeepEqual(g.UploadTargets, ups) {
 				t.Errorf("Get: %+v", g.WriteTargets)
 			}
-			if g, _ := s.GetByBearer(ctx, "bearer-w1"); !reflect.DeepEqual(g.WriteTargets, want) {
+			if g, _ := s.GetByBearer(ctx, "bearer-w1"); !reflect.DeepEqual(g.WriteTargets, want) || !reflect.DeepEqual(g.UploadTargets, ups) {
 				t.Errorf("GetByBearer: %+v", g.WriteTargets)
 			}
-			if l, _ := s.List(ctx, "acme", true); len(l) != 1 || !reflect.DeepEqual(l[0].WriteTargets, want) {
+			if l, _ := s.List(ctx, "acme", true); len(l) != 1 || !reflect.DeepEqual(l[0].WriteTargets, want) || !reflect.DeepEqual(l[0].UploadTargets, ups) {
 				t.Errorf("List (the header needs them): %+v", l)
 			}
-			if _, err := s.SetWriteTargets(ctx, "other", "w1", nil, "x", at); !errors.Is(err, ErrNotFound) {
-				t.Errorf("SetWriteTargets across workspaces: %v", err)
+			if _, err := s.SetTargets(ctx, "other", "w1", nil, nil, "x", at); !errors.Is(err, ErrNotFound) {
+				t.Errorf("SetTargets across workspaces: %v", err)
 			}
 			// An edit leaves the declaration alone.
 			upd, _ := s.Get(ctx, "acme", "w1")
@@ -218,7 +219,7 @@ func TestStores_WriteTargets(t *testing.T) {
 			if err := s.Update(ctx, upd); err != nil {
 				t.Fatal(err)
 			}
-			if g, _ := s.Get(ctx, "acme", "w1"); !reflect.DeepEqual(g.WriteTargets, want) {
+			if g, _ := s.Get(ctx, "acme", "w1"); !reflect.DeepEqual(g.WriteTargets, want) || !reflect.DeepEqual(g.UploadTargets, ups) {
 				t.Errorf("after Update: %+v", g.WriteTargets)
 			}
 			// Take ownership clears it in the same transaction as the owner change.
@@ -226,11 +227,11 @@ func TestStores_WriteTargets(t *testing.T) {
 				t.Fatal(err)
 			}
 			g, _ := s.Get(ctx, "acme", "w1")
-			if g.WriteTargets == nil || len(g.WriteTargets) != 0 || g.WriteTargetsBy != "carol" {
-				t.Errorf("after take-over: %+v by %q, want an empty declaration", g.WriteTargets, g.WriteTargetsBy)
+			if g.WriteTargets == nil || len(g.WriteTargets) != 0 || g.UploadTargets == nil || len(g.UploadTargets) != 0 || g.WriteTargetsBy != "carol" {
+				t.Errorf("after take-over: %+v %+v by %q, want an empty declaration", g.WriteTargets, g.UploadTargets, g.WriteTargetsBy)
 			}
-			if cleared, err := s.SetWriteTargets(ctx, "acme", "w1", nil, "carol", at); err != nil || cleared.WriteTargets == nil || len(cleared.WriteTargets) != 0 {
-				t.Errorf("SetWriteTargets(nil): %+v %v", cleared.WriteTargets, err)
+			if cleared, err := s.SetTargets(ctx, "acme", "w1", nil, nil, "carol", at); err != nil || cleared.WriteTargets == nil || len(cleared.WriteTargets) != 0 || cleared.UploadTargets == nil || len(cleared.UploadTargets) != 0 {
+				t.Errorf("SetTargets(nil, nil): %+v %+v %v", cleared.WriteTargets, cleared.UploadTargets, err)
 			}
 		})
 	}

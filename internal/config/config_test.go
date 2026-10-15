@@ -16,7 +16,7 @@ var allVars = []string{
 	"BOOTH_INTERNAL_URL", "BOOTH_APP_SIDECAR_IMAGE", "BOOTH_APP_SIDECAR_RESOURCES", "BOOTH_APP_DATABASE", "BOOTH_DATA_REFRESH_MAX",
 	"BOOTH_FILES_MAX_OBJECT_BYTES", "BOOTH_FILES_OBJECT_TIMEOUT", "BOOTH_FILES_META_TIMEOUT", "BOOTH_FILES_MAX_CONCURRENT",
 	"BOOTH_APP_LAKEHOUSE", "BOOTH_APP_PIP_INDEX_URL", "BOOTH_APP_PIP_TRUSTED_HOST", "BOOTH_APP_PIP_TIMEOUT", "BOOTH_APP_PIP_SITE_SIZE_LIMIT", "BOOTH_APP_PIP_EGRESS_CLOSED",
-	"BOOTH_APP_PIP_INDEX_EGRESS", "BOOTH_APP_EGRESS_MODE", "BOOTH_APP_WRITES",
+	"BOOTH_APP_PIP_INDEX_EGRESS", "BOOTH_APP_EGRESS_MODE", "BOOTH_APP_WRITES", "BOOTH_APP_UPLOADS", "BOOTH_APP_UPLOADS_MAX_BYTES",
 }
 
 // minimal is the smallest valid environment.
@@ -192,9 +192,20 @@ func TestLoad_DataAccess(t *testing.T) {
 	}
 	env["BOOTH_APP_WRITES"] = "true"
 	setEnv(t, env)
-	if cfg, err := Load(); err != nil || !cfg.Data.Writes {
+	if cfg, err := Load(); err != nil || !cfg.Data.Writes || cfg.Data.Uploads {
 		t.Errorf("BOOTH_APP_WRITES=true: %+v %v", cfg.Data, err)
 	}
+	env["BOOTH_APP_UPLOADS"], env["BOOTH_APP_UPLOADS_MAX_BYTES"] = "true", "1048576"
+	setEnv(t, env)
+	if cfg, err := Load(); err != nil || !cfg.Data.Uploads || cfg.Data.UploadsMaxBytes != 1<<20 {
+		t.Errorf("BOOTH_APP_UPLOADS=true: %+v %v", cfg.Data, err)
+	}
+	env["BOOTH_APP_UPLOADS_MAX_BYTES"] = "0"
+	setEnv(t, env)
+	if _, err := Load(); err == nil {
+		t.Error("BOOTH_APP_UPLOADS_MAX_BYTES=0 accepted")
+	}
+	delete(env, "BOOTH_APP_UPLOADS_MAX_BYTES")
 
 	for _, name := range []string{"BOOTH_WORKLOAD_MINT_URL", "BOOTH_WORKLOAD_MINT_CREDENTIAL", "BOOTH_CORE_URL", "BOOTH_INTERNAL_URL", "BOOTH_APP_SIDECAR_IMAGE"} {
 		env := dataEnv()

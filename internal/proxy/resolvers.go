@@ -50,8 +50,9 @@ func (r LifecycleResolver) Resolve(ctx context.Context, c identity.Caller, id st
 	return App{ID: a.ID, Workspace: a.Workspace, Target: target, Bearer: a.GateBearer}, nil
 }
 
-// Disclosed implements Disclosure: an app that can write is shown under the header (ADR 0117).
+// Disclosed implements Disclosure: an app that can write or upload is shown under the header
+// (ADR 0117).
 func (r LifecycleResolver) Disclosed(ctx context.Context, c identity.Caller, id string) bool {
 	a, err := r.Apps.Get(ctx, c, id)
-	return err == nil && a.Writes()
+	return err == nil && a.ChangesData()
 }

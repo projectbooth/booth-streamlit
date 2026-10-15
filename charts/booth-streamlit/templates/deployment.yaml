@@ -122,6 +122,10 @@ spec:
               value: {{ .Values.dataAccess.files.maxConcurrent | int | quote }}
             - name: BOOTH_APP_WRITES
               value: {{ .Values.dataAccess.writes.enabled | quote }}
+            - name: BOOTH_APP_UPLOADS
+              value: {{ .Values.dataAccess.uploads.enabled | quote }}
+            - name: BOOTH_APP_UPLOADS_MAX_BYTES
+              value: {{ .Values.dataAccess.uploads.maxBytes | int64 | quote }}
             {{- with .Values.dataAccess.refreshMax }}
             - name: BOOTH_DATA_REFRESH_MAX
               value: {{ . | quote }}

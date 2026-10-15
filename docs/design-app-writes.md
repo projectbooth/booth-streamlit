@@ -280,5 +280,40 @@ ADR 0117 as amended. What changed from this note:
 API, config, chart contract, Python helper, UI) and real-core (`test/integration/writes-access.sh`,
 against core's real gateway and a booth-api stand-in until booth-api's change lands).
 
-**Phase 2 (uploads, item 3)** waits for review of phase 1; booth-storage's upload-grant contract is
-on its PR #7.
+## As built: phase 2 (uploads), 2026-10-15
+
+Built against booth-storage's `docs/contracts/upload-grants.md` (its `main`, `868ab72`, released as
+v0.1.3) and ADR 0117 items 1a, 6, 7, 8 and 8a. What changed from item 3 above:
+
+- **The owner grants on booth-storage's Admin page, not here** (item 1a), and the grant holds the
+  extension list and the size cap (item 8a). This module stores only the folder
+  (`apps.upload_targets`: backend id and prefix, cleaned as booth-storage cleans prefixes) and
+  refuses only an undeclared folder and anything over its own ceiling,
+  `dataAccess.uploads.maxBytes` (512 MiB). The panel links to
+  `/storage/admin?panel=upload-grants&principal=…&backendId=…&prefix=…` in the top window:
+  booth-storage's `adminNavPath` with its documented prefill parameters. (Its contract's example
+  shows the path as `/admin?…`; the module's manifest says `/storage/admin`.)
+- **Same panel, one declaration:** upload folders are saved with the write targets in one call and
+  one confirmation ("…will be able to add files to local:finance/inbox/"). Each kind has its own
+  switch (`dataAccess.writes.enabled`, `dataAccess.uploads.enabled`).
+- **Upload proxy:** `POST /uploads/{backendId}?prefix=<folder>&name=<file>` on the gate's loopback,
+  raw body, forwarded as one `PUT /modules/storage/api/backends/{id}/objects/{folder}{UTC
+  time}-{6 random}-{name}` with `If-None-Match: *` and the app's existing token. The name is one
+  segment (booth-storage admits a grant's write exactly one segment below its folder). 5 minutes,
+  4 at once per app. Answers 201 `{"backend", "path", "size"}`; booth-storage's refusals keep their
+  status and get a code (`not_granted` in plain words, `too_large`, `extension_not_allowed`,
+  `exists`, `create_only_unsupported`, `not_found`).
+- **Helper:** `booth_streamlit.files.upload(backend_id, folder, name, data)` returns the stored
+  path; it takes bytes or a file object (such as `st.file_uploader`'s result). Only the module's own
+  "too many at once" is retried: any other failure may already have stored the file.
+- **Take ownership:** clears writes and uploads together, then revokes in booth-api, then in
+  booth-storage (`/api/admin/upload-grants/revoke-principal`, the same grants token), then changes
+  the owner. Either revoke failing is 503 and the owner doesn't change.
+- **Header and egress:** an app with any write or upload target opens under the header (which
+  lists folders as "upload to local:finance/inbox/") and is labelled `egress: closed`.
+
+**Tests:** unit (store, service, upload proxy, revokers, gate, lifecycle, API, config, chart
+contract, Python helper, UI) and real-core (`writes-access.sh` steps 5b, 6b and 7, against the real
+booth-storage v0.1.3 through core's gateway: the owner's grant made with their own token, create-
+only uploads, the grant's extension and size refusals, fail-closed take ownership with booth-storage
+unreachable, and the upload grant revoked).

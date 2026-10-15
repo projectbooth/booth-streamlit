@@ -165,3 +165,21 @@ func TestChart_AppWritesSwitch(t *testing.T) {
 		t.Error("the egress mode doesn't reach the backend")
 	}
 }
+
+func TestChart_AppUploadsSwitch(t *testing.T) {
+	envOf := func(args ...string) string { return string(helmTemplate(t, "templates/deployment.yaml", args...)) }
+	dep := envOf(dataOn...)
+	if !regexp.MustCompile(`BOOTH_APP_UPLOADS\s+value: "false"`).MatchString(dep) {
+		t.Error("app uploads must default to off")
+	}
+	if !regexp.MustCompile(`BOOTH_APP_UPLOADS_MAX_BYTES\s+value: "536870912"`).MatchString(dep) {
+		t.Error("the upload ceiling doesn't default to 512 MiB")
+	}
+	dep = envOf(append(dataOn, "--set", "dataAccess.uploads.enabled=true", "--set", "dataAccess.uploads.maxBytes=1048576")...)
+	if !regexp.MustCompile(`BOOTH_APP_UPLOADS\s+value: "true"`).MatchString(dep) || !regexp.MustCompile(`BOOTH_APP_UPLOADS_MAX_BYTES\s+value: "1048576"`).MatchString(dep) {
+		t.Error("dataAccess.uploads doesn't reach the backend")
+	}
+	if dep := envOf(); strings.Contains(dep, "BOOTH_APP_UPLOADS") {
+		t.Error("app uploads rendered without data access")
+	}
+}

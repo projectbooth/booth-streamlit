@@ -88,6 +88,13 @@ type Data struct {
 	// proxy, the Write targets panel, and the grant revoke on take ownership, which then fails
 	// closed if booth-api can't be reached. Needs booth-api installed.
 	Writes bool
+	// Uploads turns on app uploads to booth-storage (ADR 0117, dataAccess.uploads.enabled): the
+	// upload proxy, upload targets in the same panel, and the upload-grant revoke on take ownership,
+	// which then fails closed if booth-storage can't be reached. Needs booth-storage v0.1.3 or later.
+	Uploads bool
+	// UploadsMaxBytes is this module's ceiling on one upload (0 = the dataaccess default, 512 MiB).
+	// booth-storage's grant sets the real limit per folder.
+	UploadsMaxBytes int64
 }
 
 // Lifecycle is the per-app container configuration. Every value comes from the chart.
@@ -192,6 +199,7 @@ func Load() (Config, error) {
 		d.Database = os.Getenv("BOOTH_APP_DATABASE") == "true"
 		d.Lakehouse = os.Getenv("BOOTH_APP_LAKEHOUSE") == "true"
 		d.Writes = os.Getenv("BOOTH_APP_WRITES") == "true"
+		d.Uploads = os.Getenv("BOOTH_APP_UPLOADS") == "true"
 		for _, req := range []struct{ name, val string }{
 			{"BOOTH_WORKLOAD_MINT_URL", d.MintURL}, {"BOOTH_WORKLOAD_MINT_CREDENTIAL", d.MintCredential},
 			{"BOOTH_CORE_URL", d.CoreURL}, {"BOOTH_INTERNAL_URL", d.InternalURL}, {"BOOTH_APP_SIDECAR_IMAGE", d.SidecarImage},
@@ -209,6 +217,13 @@ func Load() (Config, error) {
 				return Config{}, fmt.Errorf("BOOTH_FILES_MAX_OBJECT_BYTES must be a positive integer, got %q", v)
 			}
 			d.FilesMaxObjectBytes = n
+		}
+		if v := os.Getenv("BOOTH_APP_UPLOADS_MAX_BYTES"); v != "" {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 1 {
+				return Config{}, fmt.Errorf("BOOTH_APP_UPLOADS_MAX_BYTES must be a positive integer, got %q", v)
+			}
+			d.UploadsMaxBytes = n
 		}
 		for _, dur := range []struct {
 			name string

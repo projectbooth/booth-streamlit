@@ -53,7 +53,7 @@ func mountAppAPI(r chi.Router, deps Deps) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"subject": c.Subject, "workspace": c.Workspace, "role": c.Role, "canAuthor": apps.CanAuthor(c),
 				"dataAccess": dataAccess, "catalogSources": deps.Datasets != nil,
-				"writes": deps.Writes, "egressOpen": deps.EgressOpen,
+				"writes": deps.Writes, "uploads": deps.Uploads, "egressOpen": deps.EgressOpen,
 			})
 		})
 		r.Get("/apps", func(w http.ResponseWriter, r *http.Request) {
@@ -102,12 +102,20 @@ func mountAppAPI(r chi.Router, deps Deps) {
 			respond(w, http.StatusOK, view(a, status), err)
 		})
 		r.Put("/apps/{id}/write-targets", func(w http.ResponseWriter, r *http.Request) {
-			if !deps.Writes {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "app writes are not enabled in this install (dataAccess.writes.enabled)"})
+			if !deps.Writes && !deps.Uploads {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "app writes and uploads are not enabled in this install (dataAccess.writes.enabled, dataAccess.uploads.enabled)"})
 				return
 			}
 			var in apps.WriteTargetsInput
 			if !decode(w, r, &in) {
+				return
+			}
+			switch {
+			case len(in.Targets) > 0 && !deps.Writes:
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "app writes are not enabled in this install (dataAccess.writes.enabled)"})
+				return
+			case len(in.Uploads) > 0 && !deps.Uploads:
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "app uploads are not enabled in this install (dataAccess.uploads.enabled)"})
 				return
 			}
 			a, err := svc.SetWriteTargets(r.Context(), caller(r), chi.URLParam(r, "id"), in)

@@ -33,11 +33,13 @@ type WriteTarget struct {
 	Operations []string `json:"operations"`
 }
 
-// WriteTargetsInput is what an owner saves. Confirmed is the plain-words confirmation; it is needed
-// whenever the save adds a target or an operation, not to remove one.
+// WriteTargetsInput is what an owner saves: the whole declaration, writes and uploads. Confirmed is
+// the plain-words confirmation; it is needed whenever the save adds a target, an operation or a
+// folder, not to remove one.
 type WriteTargetsInput struct {
-	Targets   []WriteTarget `json:"targets"`
-	Confirmed bool          `json:"confirmed"`
+	Targets   []WriteTarget  `json:"targets"`
+	Uploads   []UploadTarget `json:"uploads"`
+	Confirmed bool           `json:"confirmed"`
 }
 
 // apiSlugPattern is booth-api's slug rule (internal/appwrite slugRE).
@@ -124,9 +126,9 @@ func widens(cur, next []WriteTarget) bool {
 	return false
 }
 
-// SetWriteTargets replaces an app's write declaration. Owners only. Adding a target or an operation
-// needs in.Confirmed; narrowing or removing doesn't. Turning the first target on or the last one
-// off rolls the pod (its egress changes).
+// SetWriteTargets replaces an app's write and upload declaration. Owners only. Adding a target, an
+// operation or a folder needs in.Confirmed; narrowing or removing doesn't. Turning the first target
+// of either kind on or the last one off rolls the pod (its egress changes).
 func (s *Service) SetWriteTargets(ctx context.Context, c identity.Caller, id string, in WriteTargetsInput) (App, error) {
 	cur, err := s.authorizeWrite(ctx, c, id)
 	if err != nil {
@@ -136,20 +138,24 @@ func (s *Service) SetWriteTargets(ctx context.Context, c identity.Caller, id str
 	if err != nil {
 		return App{}, err
 	}
-	if widens(cur.WriteTargets, targets) && !in.Confirmed {
-		return App{}, ErrConfirmationRequired
-	}
-	a, err := s.store.SetWriteTargets(ctx, c.Workspace, id, targets, c.Subject, s.now().UTC())
+	uploads, err := validateUploadTargets(in.Uploads)
 	if err != nil {
 		return App{}, err
 	}
-	log.Printf("write targets: app=%s workspace=%s by=%s targets=%v", id, c.Workspace, c.Subject, targets)
+	if (widens(cur.WriteTargets, targets) || widensUploads(cur.UploadTargets, uploads)) && !in.Confirmed {
+		return App{}, ErrConfirmationRequired
+	}
+	a, err := s.store.SetTargets(ctx, c.Workspace, id, targets, uploads, c.Subject, s.now().UTC())
+	if err != nil {
+		return App{}, err
+	}
+	log.Printf("write targets: app=%s workspace=%s by=%s targets=%v uploads=%v", id, c.Workspace, c.Subject, targets, uploads)
 	s.changed(id)
 	return a, nil
 }
 
-// GrantRevoker revokes every write grant other modules hold for an app's principal. Take ownership
-// calls it, and fails closed if it errors.
+// GrantRevoker revokes every grant a module holds for an app's principal. Take ownership calls it,
+// and fails closed if it errors.
 type GrantRevoker interface {
 	// RevokeGrants revokes principal's grants in workspace. actingOwner is the workspace owner
 	// taking the app over: the revoke token is minted under their access.

@@ -82,10 +82,12 @@ type DataConfig struct {
 	// BrokerURL is the backend's broker forwarder base; the sidecars' --core-url.
 	BrokerURL string
 	// FilesURL is the backend's internal base the gate forwards /files/... to (the file read proxy),
-	// and /writes/... when Writes is on.
+	// and /writes/... and /uploads/... when those are on.
 	FilesURL string
 	// Writes: app writes are on (ADR 0117). An app with write targets gets BOOTH_WRITES_URL.
 	Writes bool
+	// Uploads: app uploads are on (ADR 0117). An app with upload targets gets BOOTH_UPLOADS_URL.
+	Uploads bool
 	// SidecarImage is booth-core's credential sidecar, digest-pinned.
 	SidecarImage     string
 	SidecarResources corev1.ResourceRequirements

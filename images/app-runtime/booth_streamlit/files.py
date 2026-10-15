@@ -14,20 +14,32 @@ loopback, which adds the app's identity and passes them to the module.
 Errors: DataAccessPaused (the owner lost access; the message says why), FileNotFoundError (no such
 object, backend or dataset in this workspace), PermissionError, ValueError (a path the module
 refuses, e.g. ".."), RuntimeError for anything else.
+
+Uploads (ADR 0117): an app whose owner declared a Storage folder in its Write targets, and granted it
+on Storage's Admin page (App uploads), can add files there. Create-only: a file is never replaced,
+deleted or listed through this call.
+
+    path = files.upload("local", "finance/inbox/", "statement.csv", uploaded_file.getvalue())
+
+It returns the stored path, {folder}{UTC time}-{6 random}-{name}, so two people uploading
+statement.csv don't collide. Errors: UploadRefused (status, code, message: not_an_upload_target,
+not_granted, extension_not_allowed, too_large, ...), DataAccessOff, DataAccessPaused.
 """
 
 from __future__ import annotations
 
 import json as _json
+import mimetypes as _mimetypes
 import os as _os
+import time as _time
 import urllib.error as _urlerr
 import urllib.parse as _urlparse
 import urllib.request as _urlreq
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 from . import DataAccessOff, DataAccessPaused
 
-__all__ = ["read", "open", "list", "dataset", "read_dataset"]
+__all__ = ["read", "open", "list", "dataset", "read_dataset", "upload", "UploadRefused"]
 
 _TIMEOUT = 330  # a little over the module's 5-minute object timeout
 
@@ -112,3 +124,80 @@ def read_dataset(dataset_id: str, path: Optional[str] = None) -> bytes:
         path = dataset(dataset_id)["location"]["path"].strip("/")
     with _request(f"/datasets/{_urlparse.quote(dataset_id, safe='')}/content/{_quote_path(path)}") as resp:
         return resp.read()
+
+
+class UploadRefused(Exception):
+    """The upload was refused; nothing was stored. ``code`` says why (not_an_upload_target: the
+    folder isn't declared in the app's Write targets; not_granted: no owner's grant on Storage's
+    Admin page; extension_not_allowed, too_large, ...) and ``message`` says it in words."""
+
+    def __init__(self, status: int, code: str, message: str):
+        super().__init__(f"{message} ({status} {code})" if code else f"{message} ({status})")
+        self.status = status
+        self.code = code
+        self.message = message
+
+
+_UPLOAD_ATTEMPTS = 3
+
+
+def _uploads_base() -> str:
+    url = _os.environ.get("BOOTH_UPLOADS_URL")
+    if not url:
+        raise DataAccessOff(
+            "this app can't upload: its owner hasn't declared any Storage folders (app settings, Write targets), "
+            "or app uploads are off in this Booth install"
+        )
+    return url.rstrip("/")
+
+
+def _bytes_of(data: Any) -> bytes:
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        return bytes(data)
+    if hasattr(data, "getvalue"):  # Streamlit's UploadedFile, io.BytesIO
+        return bytes(data.getvalue())
+    if hasattr(data, "read"):
+        return bytes(data.read())
+    raise TypeError(f"upload takes bytes or a binary file object, not {type(data).__name__}")
+
+
+def upload(backend_id: str, folder: str, name: str, data: Any, content_type: Optional[str] = None) -> str:
+    """Add one file to a declared Storage folder; returns its stored path.
+
+    ``folder`` is the folder as declared ("" for the backend's root); ``name`` is one file name, no
+    "/". ``data`` is bytes or a binary file object (such as st.file_uploader's result).
+    """
+    body = _bytes_of(data)
+    url = _uploads_base() + "/" + _urlparse.quote(backend_id, safe="") + "?" + _urlparse.urlencode({"prefix": folder, "name": name})
+    # The built-in table, not the platform's (a Windows registry calls .csv vnd.ms-excel).
+    ct = content_type or _mimetypes.MimeTypes().guess_type(name)[0] or "application/octet-stream"
+    for attempt in range(_UPLOAD_ATTEMPTS):
+        req = _urlreq.Request(url, data=body, method="POST", headers={"Content-Type": ct})
+        try:
+            with _urlreq.urlopen(req, timeout=_TIMEOUT) as resp:  # noqa: S310 - fixed loopback URL from the pod spec
+                return _json.load(resp)["path"]
+        except _urlerr.HTTPError as err:
+            status, raw = err.code, err.read(64 << 10)
+        code, message = _upload_error(status, raw)
+        if status == 403 and code == "data_access_paused":
+            raise DataAccessPaused(message)
+        # Only the module's own "too many at once" is retried: nothing reached booth-storage. Any
+        # other answer may have stored the file, and a retry would store it twice.
+        if status == 429 and code == "too_many_uploads" and attempt < _UPLOAD_ATTEMPTS - 1:
+            _time.sleep(0.5 * 2**attempt)
+            continue
+        raise UploadRefused(status, code, message)
+    raise AssertionError("unreachable")
+
+
+def _upload_error(status: int, raw: bytes) -> "tuple[str, str]":
+    try:
+        payload = _json.loads(raw)
+    except ValueError:
+        return "", raw.decode(errors="replace") or f"HTTP {status}"
+    err = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(err, dict):
+        return err.get("code", ""), err.get("message", "") or f"HTTP {status}"
+    if isinstance(err, str):  # the internal port's own shape (data_access_paused, unauthorized)
+        return err, payload.get("reason") or err
+    return "", f"HTTP {status}"

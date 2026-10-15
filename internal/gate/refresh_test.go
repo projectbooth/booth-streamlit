@@ -92,9 +92,10 @@ func TestRefresher_BackendErrorKeepsTheFile(t *testing.T) {
 	}
 }
 
-// The loopback listener forwards /files/... and /writes/... to the backend with the app's bearer, replacing any
-// Authorization the caller sent, and passes the path exactly as written: no cleaning of "..", no
-// decoding of %2F, so the backend sees (and refuses) what app code asked for.
+// The loopback listener forwards /files/..., /writes/... and /uploads/... to the backend with the
+// app's bearer, replacing any Authorization the caller sent, and passes the path exactly as
+// written: no cleaning of "..", no decoding of %2F, so the backend sees (and refuses) what app
+// code asked for.
 func TestLoopback_ForwardsFilesWithTheBearerAndTheRawPath(t *testing.T) {
 	var got *http.Request
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +114,7 @@ func TestLoopback_ForwardsFilesWithTheBearerAndTheRawPath(t *testing.T) {
 		"/writes/household/rows",
 		"/writes/household/rows/a%2Fb",
 		"/writes/household/rows?key%5Bid%5D=1",
+		"/uploads/local?prefix=finance/inbox/&name=a.csv",
 	} {
 		req, _ := http.NewRequest(http.MethodPut, lb.URL+"/x", nil)
 		req.URL.Opaque = "//" + req.URL.Host + raw

@@ -105,7 +105,8 @@ Data access (ADR 0104/0107) is off by default. Each toggle adds to every app pod
 | `dataAccess.database.enabled` | A `pg-sidecar` (core's credential sidecar, postgres mode, read only, the app's workspace) and `DATABASE_URL`. An egress rule to booth-database's Postgres (`dataAccess.database.egress.*`, port 5432). | booth-database (ADR 0081). |
 | `dataAccess.lakehouse.enabled` | When the workspace **has a warehouse at the moment the app starts**: an `s3-sidecar` (s3 mode, read only, the warehouse prefix), the keys file mounted read-only in the app, and `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE` and `BOOTH_WAREHOUSE_ROOT`. A warehouse created later reaches an app at its next start. | booth-lakehouse, and booth-storage with its s3 credential provider. For an in-cluster object store, `dataAccess.lakehouse.egress.*` (both selectors required). An external store goes through `apps.egress.mode=open`. |
 
-| `dataAccess.writes.enabled` (default `false`; needs `dataAccess.enabled`) | App writes through booth-api (ADR 0117). Owners get a **Write targets** panel in the editor. An app with at least one target gets `BOOTH_WRITES_URL` and `booth_streamlit.api` (the write proxy, through the gate), is labelled `booth.projectbooth.io/egress: closed` (no internet, see below), and opens under a header that lists its targets. **Take ownership** first clears the app's targets, then revokes its grants in booth-api, and refuses (503, owner unchanged) if that revoke fails. | booth-api with app writes and the revoke-only path (ADR 0117 item 1a), trusting core's workload issuer. **Without booth-api installed, take ownership always fails**, so leave this off. Each write also needs an owner's grant on booth-api's own page. |
+| `dataAccess.writes.enabled` (default `false`; needs `dataAccess.enabled`) | App writes through booth-api (ADR 0117). Owners get a **Write targets** panel in the editor. An app with at least one target gets `BOOTH_WRITES_URL` and `booth_streamlit.api` (the write proxy, through the gate), is labelled `booth.projectbooth.io/egress: closed` (no internet, see below), and opens under a header that lists its targets. **Take ownership** first clears the app's targets, then revokes its grants in booth-api, and refuses (503, owner unchanged) if that revoke fails. | booth-api v0.1.4 or later (app writes and the revoke-only path, ADR 0117 item 1a), trusting core's workload issuer. **Without booth-api installed, take ownership always fails**, so leave this off. Each write also needs an owner's grant on booth-api's own page. |
+| `dataAccess.uploads.enabled` (default `false`; needs `dataAccess.enabled`) | App uploads to booth-storage (ADR 0117 items 6 and 7). The **Write targets** panel gets Storage folders (a backend id and a folder). An app with at least one folder gets `BOOTH_UPLOADS_URL` and `booth_streamlit.files.upload` (the upload proxy, through the gate), is labelled `egress: closed` like a writing app, and opens under the header, which lists its folders too. **Take ownership** also revokes the app's upload grants in booth-storage, after booth-api's, and refuses (503, owner unchanged) if either revoke fails. `dataAccess.uploads.maxBytes` (default 512 MiB) is this module's ceiling on one upload; the grant's own size cap is the real limit. | booth-storage v0.1.3 or later (create-only PUT, upload grants, the revoke-only grants identity), trusting core's workload issuer. **Without it, take ownership always fails**, so leave this off. Each folder also needs an owner's grant on booth-storage's Admin page (App uploads). |
 
 Both sidecars use `dataAccess.sidecar.image` (digest-pinned) and `dataAccess.sidecar.resources`.
 `dataAccess.files.*` sets the file proxy's limits: `maxObjectBytes` 512 MiB, `objectTimeout` 5m,
@@ -122,9 +123,9 @@ differently in each module:
 
 | Module | Value | If it's missing or doesn't match |
 |---|---|---|
-| booth-storage | `oidc.workloadIssuerUrl` | Storage refuses the app's token. `booth_streamlit.files.read(...)` raises `PermissionError: storage refused the app's access`, and the backend logs `files: storage refused the app's token (<status>): …`. |
+| booth-storage | `oidc.workloadIssuerUrl` | Storage refuses the app's token. `booth_streamlit.files.read(...)` raises `PermissionError: storage refused the app's access`, and the backend logs `files: storage refused the app's token (<status>): …`. With `dataAccess.uploads.enabled`, uploads are refused (`UploadRefused`, status 401) and **take ownership fails**, with `take ownership refused: … booth-storage answered 401` in the backend log. |
 | booth-catalog | `workloadIdentity.issuerUrl` | Catalog refuses the token. Reading a dataset raises `PermissionError: catalog refused the app's access`, and the backend logs `files: catalog refused the app's token …`. The editor's source picker shows "booth-catalog could not be read", with `api: listing catalog datasets …` in the backend log. |
-| booth-api (only with `dataAccess.writes.enabled`) | its workload-issuer setting (`oidc.workloadIssuerUrl` on its `app-writes` branch) | booth-api answers 401 to the app's writes, which `booth_streamlit.api` raises as `WriteRefused` with status 401. It also answers 401 to the revoke, so **take ownership fails** with "the app's write grants could not be revoked", and the backend logs `take ownership refused: … booth-api answered 401`. |
+| booth-api (only with `dataAccess.writes.enabled`) | `oidc.workloadIssuerUrl` (v0.1.4 or later) | booth-api answers 401 to the app's writes, which `booth_streamlit.api` raises as `WriteRefused` with status 401. It also answers 401 to the revoke, so **take ownership fails** with "the app's write or upload grants could not be revoked", and the backend logs `take ownership refused: … booth-api answered 401`. |
 | booth-lakehouse | `identity.workloadIssuerUrl`, or nothing: when it's empty and booth-lakehouse's `workloadIdentity.enabled` is `true` (its default), it takes the `issuer` key of the Secret core writes for it | Apps start **without** the s3 sidecar. The backend logs `lifecycle: app <id> starts without lakehouse access: booth-lakehouse answered <status>`, and `booth_streamlit.pyarrow_fs()` raises `DataAccessOff` ("this app has no lakehouse access…"). |
 
 **Read the value from core, don't copy a default:**
@@ -229,7 +230,7 @@ app's cluster objects from it.
 - `apps.egress.mode=open` allows IPv4 only.
 - **Egress is per app, through a pod label.** The internet rule is its own NetworkPolicy
   (`<release>-apps-egress-open`), which selects app pods labelled `booth.projectbooth.io/egress:
-  open`. The backend labels an app `closed` while it declares any write target (ADR 0117 item 7),
+  open`. The backend labels an app `closed` while it declares any write or upload target (ADR 0117 item 7),
   so app code that can change platform data has no internet. Such an app's `requirements.txt` can
   install only from an in-cluster index (`apps.pip.egress`). `apps.egress.mode=closed` doesn't
   render the open policy at all, so it closes every app.
@@ -249,9 +250,23 @@ app's cluster objects from it.
     backend knows the frame by its referrer (the module page; the frame sets
     `referrerpolicy=same-origin`). App code is same-origin (item 55), so the header is a disclosure,
     not a barrier.
-  - Deleting an app doesn't revoke its grants in booth-api. They name an app id that is never
-    reused, so nothing can use them, but they stay listed on booth-api's page until an owner
-    revokes them.
+  - Deleting an app doesn't revoke its grants in booth-api or booth-storage. They name an app id
+    that is never reused, so nothing can use them, but they stay listed on those modules' pages
+    until an owner revokes them.
+- **App uploads (ADR 0117), what is and isn't enforced here:**
+  - An upload needs both the app's declared folder here and booth-storage's live grant for the
+    same backend and folder. The grant, made on booth-storage's Admin page (App uploads), sets the
+    allowed extensions and the size cap; this module doesn't know them, so it refuses only an
+    undeclared folder (`not_an_upload_target`) and anything over `dataAccess.uploads.maxBytes`. The
+    panel links to `/storage/admin?panel=upload-grants&principal=…&backendId=…&prefix=…`
+    (booth-storage's `adminNavPath` and prefill parameters).
+  - Each upload is one create-only `PUT` with `If-None-Match: *`, as the app's own token, into the
+    declared folder exactly (never a subfolder), named `{folder}{UTC time}-{6 random}-{name}`. The
+    upload proxy has no read, list, overwrite or delete; the app reads files through the read
+    proxy (`files.read`) like any other object.
+  - booth-storage's refusals reach app code as `UploadRefused` with a code: `not_granted`,
+    `extension_not_allowed`, `too_large`, `exists`, `create_only_unsupported` (an S3 backend that
+    hasn't passed booth-storage's create-only probe; an owner runs Test on it), `not_found`.
 - **psycopg and `timestamptz`.** On the homelab, reading a `timestamptz` column with the image's
   `psycopg[binary]==3.3.6` crashed the app container (SIGSEGV, exit 139). It hasn't been
   reproduced on the same base image with the image's full requirements, reading `timestamptz` as
@@ -275,6 +290,9 @@ app's cluster objects from it.
   `booth.projectbooth.io/egress` label, and the internet rule moves to its own policy that selects
   it. A running app has no internet between the chart's policies changing and its pod being
   replaced, which the backend does at once (as above).
+- **Upgrading to the release with app uploads:** migration `0007_upload_targets` adds an empty
+  `upload_targets` column. Turning `dataAccess.uploads.enabled` on restarts the backend only; an
+  app's pod changes when its owner first declares a folder.
 - **Egress changes:**
   - Changing the egress *rules* (`apps.egress.dns.*`, `apps.pip.egress.*`, `dataAccess.*.egress.*`)
     changes only the NetworkPolicies, so no app restarts, except as below.

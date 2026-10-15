@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
-import type { App as BoothApp, Role, WriteTarget } from "../api";
+import type { App as BoothApp, Role, UploadTarget, WriteTarget } from "../api";
 
 // ADR 0117: the Write targets panel (the app's side of the declaration), the header every viewer
 // sees above an app that can write, and the plain-words confirmation.
@@ -29,7 +29,10 @@ function backend(role: Role, app: BoothApp, me: Record<string, unknown> = {}) {
         return json(200, { subject: "o", workspace: "acme", role, canAuthor: role === "owner", dataAccess: true, writes: true, egressOpen: true, ...me });
       if (key === "GET api/apps") return json(200, { apps: [app] });
       if (key === "GET api/apps/aaaa") return json(200, { ...app, source: "import streamlit" });
-      if (key === "PUT api/apps/aaaa/write-targets") return json(200, { ...app, writeTargets: (body as { targets: WriteTarget[] }).targets });
+      if (key === "PUT api/apps/aaaa/write-targets") {
+        const b = body as { targets: WriteTarget[]; uploads: UploadTarget[] };
+        return json(200, { ...app, writeTargets: b.targets, uploadTargets: b.uploads });
+      }
       return json(404, { error: "not found" });
     }),
   );
@@ -72,7 +75,7 @@ describe("Write targets panel", () => {
     await userEvent.click(confirm);
     await userEvent.click(save);
     await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
-    expect(calls.find((c) => c.method === "PUT")!.body).toEqual({ targets: [{ api: "household", operations: ["insert"] }], confirmed: true });
+    expect(calls.find((c) => c.method === "PUT")!.body).toEqual({ targets: [{ api: "household", operations: ["insert"] }], uploads: [], confirmed: true });
     expect(await screen.findByRole("status")).toHaveTextContent("Without an owner's grant on the API page");
   });
 
@@ -82,7 +85,34 @@ describe("Write targets panel", () => {
     await userEvent.click(within(screen.getByText("household").closest("li")!).getByRole("button", { name: "Remove" }));
     expect(screen.queryByRole("checkbox", { name: /Anyone who can open this app/ })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Save write targets" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ targets: [], confirmed: false }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ targets: [], uploads: [], confirmed: false }));
+  });
+
+  it("adds an upload folder with the confirmation, and links to Storage's App uploads with the grant filled in", async () => {
+    const calls = backend("owner", base, { uploads: true });
+    await openEditor();
+    expect(screen.getByText(/It can only add new files/)).toHaveTextContent("streamlit:acme:aaaa");
+
+    await userEvent.type(screen.getByRole("textbox", { name: "Storage backend" }), "local");
+    await userEvent.type(screen.getByRole("textbox", { name: "Folder" }), "/finance/inbox");
+    await userEvent.click(screen.getByRole("button", { name: "Add folder" }));
+    const target = screen.getByText("local:finance/inbox/").closest("li")!;
+    const link = within(target).getByRole("link", { name: "Grant on the Storage page" });
+    expect(link).toHaveAttribute("href", "/storage/admin?panel=upload-grants&principal=streamlit%3Aacme%3Aaaaa&backendId=local&prefix=finance%2Finbox%2F");
+    expect(link).toHaveAttribute("target", "_top");
+
+    await userEvent.click(screen.getByRole("checkbox", { name: /will be able to add files to local:finance\/inbox\// }));
+    await userEvent.click(screen.getByRole("button", { name: "Save write targets" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ targets: [], uploads: [{ backend: "local", prefix: "finance/inbox/" }], confirmed: true }),
+    );
+  });
+
+  it("shows only uploads when the install has uploads but not writes", async () => {
+    backend("owner", base, { writes: false, uploads: true });
+    await openEditor();
+    expect(screen.getByRole("heading", { name: "Files, into Storage folders" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Tables, through the API module" })).toBeNull();
   });
 
   it("isn't shown when the install has no app writes", async () => {
@@ -128,5 +158,17 @@ describe("header disclosure", () => {
     expect(screen.getByTitle("Finance")).toHaveAttribute("src", "apps/aaaa/");
     // The backend lets only this frame load the app without the header; it knows it by referrer.
     expect(screen.getByTitle("Finance")).toHaveAttribute("referrerpolicy", "same-origin");
+  });
+
+  it("an app that only uploads opens under the header too, which names the folder", async () => {
+    const uploading = { ...base, uploadTargets: [{ backend: "local", prefix: "finance/inbox/" }] } as BoothApp;
+    backend("viewer", uploading);
+    render(<App />);
+    const row = (await screen.findByText("Finance")).closest("li")!;
+    expect(within(row).getByText("Can write to: upload to local:finance/inbox/")).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: "Open" })).toHaveAttribute("href", "#app=aaaa");
+    window.location.hash = "#app=aaaa";
+    render(<App />);
+    expect(await screen.findByRole("note", { name: "What this app can change" })).toHaveTextContent("This app can write to: upload to local:finance/inbox/.");
   });
 });
