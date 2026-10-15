@@ -129,6 +129,7 @@ func run() error {
 	}
 	svc.OnChange = ctrl.OnAppChange
 	go ctrl.Run(ctx)
+	resolver := proxy.LifecycleResolver{Apps: svc, Lifecycle: ctrl, Namespace: cfg.Lifecycle.Namespace}
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
@@ -138,7 +139,8 @@ func run() error {
 			Writes: cfg.Data.Enabled && cfg.Data.Writes, EgressOpen: cfg.Lifecycle.EgressOpen,
 			Proxy: &proxy.Handler{
 				Verifier:     verifier,
-				Apps:         proxy.LifecycleResolver{Apps: svc, Lifecycle: ctrl, Namespace: cfg.Lifecycle.Namespace},
+				Apps:         resolver,
+				Disclosure:   resolver,
 				Activity:     ctrl,
 				MaxWebsocket: cfg.Lifecycle.MaxWebsocket,
 			},

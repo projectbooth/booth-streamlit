@@ -121,4 +121,4 @@ export const principalOf = (workspace: string, id: string) => `streamlit:${works
  * (ADR 0117 item 1a). Absolute and opened in the top window: the shell, not this iframe, shows it.
  */
 export const grantURL = (workspace: string, id: string, apiSlug: string) =>
-  `/apis?${new URLSearchParams({ api: apiSlug, grant: principalOf(workspace, id) }).toString()}`;
+  `/apis?${new URLSearchParams({ writeApi: apiSlug, writePrincipal: principalOf(workspace, id) }).toString()}`;

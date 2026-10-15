@@ -57,7 +57,9 @@ function AppFrame({ id }: { id: string }) {
   return (
     <div className="flex h-screen flex-col bg-white dark:bg-gray-950">
       {targets.length > 0 && <WritesHeader targets={targets} />}
-      <iframe title={app.data.name} src={appURL(id)} className="w-full flex-1 border-0" />
+      {/* The backend sends every other page load of this app here; it knows this frame by its
+          referrer, so the policy is set rather than left to the defaults. */}
+      <iframe title={app.data.name} src={appURL(id)} referrerPolicy="same-origin" className="w-full flex-1 border-0" />
     </div>
   );
 }

@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -93,10 +94,20 @@ type Verifier interface {
 	Verify(r *http.Request) (identity.Caller, error)
 }
 
+// Disclosure says whether an app must be shown under the module page's header (ADR 0117 item 2:
+// an app that can write). It applies the same visibility rule as Resolver; an app the caller may
+// not open answers false and the request then gets Resolver's answer.
+type Disclosure interface {
+	Disclosed(ctx context.Context, c identity.Caller, id string) bool
+}
+
 // Handler serves /apps/{id}/*.
 type Handler struct {
 	Verifier Verifier
 	Apps     Resolver
+	// Disclosure, if set, sends every page load of an app that must show the header, other than the
+	// module page's own frame, to that page (wrapped).
+	Disclosure Disclosure
 	// Activity, if set, is told about every request and websocket.
 	Activity Activity
 	// MaxWebsocket bounds a websocket's life; 0 means DefaultMaxWebsocket.
@@ -126,6 +137,12 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		}
+		return
+	}
+
+	if h.Disclosure != nil && pageLoad(r) && !fromWrapper(r, chi.URLParam(r, "id")) &&
+		h.Disclosure.Disclosed(r.Context(), caller, chi.URLParam(r, "id")) {
+		wrapped(w, r, chi.URLParam(r, "id"))
 		return
 	}
 
@@ -201,6 +218,59 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rp.ServeHTTP(w, r)
+}
+
+// pageLoad reports a browser loading a page of the app (a navigation), as opposed to the page's own
+// scripts, styles, API calls and websocket. A browser without Fetch Metadata is judged by Accept.
+func pageLoad(r *http.Request) bool {
+	if r.Method != http.MethodGet || isUpgrade(r) {
+		return false
+	}
+	if mode := r.Header.Get("Sec-Fetch-Mode"); mode != "" {
+		return mode == "navigate"
+	}
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+// wrapperReferer is the module page as the browser sees it (core serves a module's iframe at
+// /iframe/<module>/, ADR 0016), and appReferer any page of one app below it.
+var (
+	wrapperReferer = regexp.MustCompile(`^/iframe/[^/]+/$`)
+	appReferer     = regexp.MustCompile(`^/iframe/[^/]+/apps/([^/]+)(/|$)`)
+)
+
+// fromWrapper reports a page load in a frame whose referrer is the module page (the wrapped view,
+// whose iframe sets referrerpolicy=same-origin) or a page of the same app (its starting page
+// refreshing itself, or a reload inside the frame). Anything else, including every top-level load
+// and a frame the shell or another app points at the app, is sent to the wrapped view. The app is
+// same-origin, so this keeps the header in view; it is a disclosure, not a barrier.
+func fromWrapper(r *http.Request, id string) bool {
+	if r.Header.Get("Sec-Fetch-Dest") != "iframe" {
+		return false
+	}
+	// Only the path is compared: a proxy in front of core may present a different Host to this
+	// module than the browser's, and a wrong answer here would nest the wrapped page in itself.
+	ref, err := url.Parse(r.Referer())
+	if err != nil {
+		return false
+	}
+	if wrapperReferer.MatchString(ref.Path) {
+		return true
+	}
+	m := appReferer.FindStringSubmatch(ref.Path)
+	return m != nil && m[1] == id
+}
+
+// wrapped answers 303 to the module page showing app id under the header. The Location is
+// relative, because only the browser knows the prefix core serves this module under: from
+// /apps/<id>/<rest>, one "../" per directory climbs back to the module page.
+func wrapped(w http.ResponseWriter, r *http.Request, id string) {
+	up := strings.Repeat("../", strings.Count(r.URL.Path, "/")-1)
+	w.Header().Set("Cache-Control", "no-store")
+	// Set directly: http.Redirect would resolve a relative Location against this module's own path,
+	// which lacks core's prefix.
+	w.Header().Set("Location", up+"#app="+url.PathEscape(id))
+	w.WriteHeader(http.StatusSeeOther)
 }
 
 func isUpgrade(r *http.Request) bool {

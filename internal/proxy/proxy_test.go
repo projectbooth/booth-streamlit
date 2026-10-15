@@ -208,3 +208,73 @@ func TestProxy_Websocket(t *testing.T) {
 		t.Fatalf("an unauthenticated upgrade was not refused: %v %v", resp, err)
 	}
 }
+
+// disclosed is a Disclosure over a fixed set of app ids.
+type disclosed map[string]bool
+
+func (d disclosed) Disclosed(_ context.Context, _ identity.Caller, id string) bool { return d[id] }
+
+// An app that can write shows the module page's header on every visit (ADR 0117 item 2): any page
+// load other than the module page's own frame goes to that page; the page's own requests don't.
+func TestProxy_SendsPageLoadsOfADisclosedAppToTheWrappedView(t *testing.T) {
+	a := newApp(t)
+	u, _ := url.Parse(a.srv.URL)
+	r := chi.NewRouter()
+	(&Handler{
+		Verifier:   fakeVerifier{},
+		Apps:       fixed{"demo": {ID: "demo", Workspace: "acme", Target: u}, "plain": {ID: "plain", Workspace: "acme", Target: u}},
+		Disclosure: disclosed{"demo": true},
+	}).Mount(r)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	id := identity.HeaderIdentity
+	nav := func(dest, referer string) map[string]string {
+		h := map[string]string{id: "good-acme", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": dest}
+		if referer != "" {
+			h["Referer"] = referer
+		}
+		return h
+	}
+	const shell = "https://booth.example/iframe/streamlit/"
+	cases := []struct {
+		name, path string
+		hdr        map[string]string
+		location   string // "" means forwarded to the app
+	}{
+		{"top-level load", "/apps/demo/", nav("document", ""), "../../#app=demo"},
+		{"top-level load of a page", "/apps/demo/sub/page", nav("document", shell), "../../../#app=demo"},
+		{"top-level, no fetch metadata", "/apps/demo/", map[string]string{id: "good-acme", "Accept": "text/html"}, "../../#app=demo"},
+		{"frame the shell points at the app", "/apps/demo/", nav("iframe", "https://booth.example/"), "../../#app=demo"},
+		{"frame without a referrer", "/apps/demo/", nav("iframe", ""), "../../#app=demo"},
+		{"frame inside another app", "/apps/demo/", nav("iframe", shell+"apps/other/"), "../../#app=demo"},
+		{"the module page's frame", "/apps/demo/", nav("iframe", shell), ""},
+		{"the app's own page reloading", "/apps/demo/", nav("iframe", shell+"apps/demo/"), ""},
+		{"the page's scripts", "/apps/demo/static/app.js", map[string]string{id: "good-acme", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "script"}, ""},
+		{"an app without targets", "/apps/plain/", nav("document", ""), ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a.last = nil
+			resp := do(t, srv, c.path, c.hdr)
+			if c.location == "" {
+				if resp.StatusCode != 200 || a.last == nil {
+					t.Fatalf("status %d, forwarded %v; want it forwarded", resp.StatusCode, a.last != nil)
+				}
+				return
+			}
+			if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != c.location {
+				t.Errorf("got %d %q, want 303 %q", resp.StatusCode, resp.Header.Get("Location"), c.location)
+			}
+			if a.last != nil {
+				t.Error("a redirected page load reached the app")
+			}
+		})
+	}
+
+	// The relative Location lands on the module page, whatever prefix core serves it under.
+	base, _ := url.Parse("https://booth.example/iframe/streamlit/apps/demo/sub/page")
+	if got := base.ResolveReference(&url.URL{Path: "../../../", Fragment: "app=demo"}).String(); got != shell+"#app=demo" {
+		t.Errorf("resolves to %s", got)
+	}
+}

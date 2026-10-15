@@ -248,7 +248,7 @@ ADR 0117 as amended. What changed from this note:
   app-side declaration (`apps.write_targets`: API slug and operations) for the header, the early
   refusal and the egress label. A write needs both.
 - **The owner grants on booth-api's page, not here** (item 1a): this module never holds a person's
-  token. The Write targets panel links to `/apis?api=<slug>&grant=streamlit:<workspace>:<appId>`
+  token. The Write targets panel links to `/apis?writeApi=<slug>&writePrincipal=streamlit:<workspace>:<appId>`
   in the top window; booth-api reading those parameters is booth-api's work. A `not_granted`
   answer is rewritten into plain words naming the API page and the principal.
 - **Targets are booth-api API slugs**, one table each, not (API, dataset) pairs. The panel takes
@@ -270,7 +270,9 @@ ADR 0117 as amended. What changed from this note:
   changes the owner, which clears the declaration again in the same transaction. A failed revoke is
   503 and the owner doesn't change. With `dataAccess.writes.enabled` off there is no revoke.
 - **Header:** an app with targets opens at `#app=<id>` on the module's own page: the header, then
-  the app in a frame. An app without targets opens directly, as before.
+  the app in a frame. An app without targets opens directly, as before. Any other page load of an
+  app with targets (top-level, or a frame whose referrer isn't the module page or the app itself)
+  gets 303 to that page, so the header shows on every visit (coordinator review of PR #24).
 - **Egress:** as item 5, with the `booth.projectbooth.io/egress` label always set (`open` or
   `closed`) and pip told its egress is closed unless `apps.pip.egress` names an index.
 

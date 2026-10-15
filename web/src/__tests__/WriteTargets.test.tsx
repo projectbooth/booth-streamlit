@@ -63,7 +63,7 @@ describe("Write targets panel", () => {
     expect(within(target).getByRole("checkbox", { name: "change" })).not.toBeChecked();
     expect(within(target).getByRole("checkbox", { name: "delete" })).not.toBeChecked();
     const link = within(target).getByRole("link", { name: "Grant on the API page" });
-    expect(link).toHaveAttribute("href", "/apis?api=household&grant=streamlit%3Aacme%3Aaaaa");
+    expect(link).toHaveAttribute("href", "/apis?writeApi=household&writePrincipal=streamlit%3Aacme%3Aaaaa");
     expect(link).toHaveAttribute("target", "_top");
 
     const save = screen.getByRole("button", { name: "Save write targets" });
@@ -126,5 +126,7 @@ describe("header disclosure", () => {
     const note = await screen.findByRole("note", { name: "What this app can change" });
     expect(note).toHaveTextContent("This app can write to: household (add, change). Anyone who opens it can make these changes, as the app.");
     expect(screen.getByTitle("Finance")).toHaveAttribute("src", "apps/aaaa/");
+    // The backend lets only this frame load the app without the header; it knows it by referrer.
+    expect(screen.getByTitle("Finance")).toHaveAttribute("referrerpolicy", "same-origin");
   });
 });

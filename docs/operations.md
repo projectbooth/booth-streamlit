@@ -236,17 +236,19 @@ app's cluster objects from it.
 - **App writes (ADR 0117), what is and isn't enforced here:**
   - A write needs both the app's declaration here and booth-api's live grant. This module can't
     make or read the grant: it never holds a person's sign-in token. The panel links to booth-api's
-    page (`/apis?api=<slug>&grant=streamlit:<workspace>:<appId>`) for the owner to make it there.
+    page (`/apis?writeApi=<slug>&writePrincipal=streamlit:<workspace>:<appId>`) for the owner to make it there.
   - The declaration narrows by operation: insert, update and delete, with delete off by default.
     booth-api's GraphQL write route isn't forwarded, because one GraphQL request could name an
     operation the owner didn't declare.
   - `entered_by` and `X-Booth-App-User` are **stated by the app's code** (`booth_streamlit.user()`),
     not checked: the gate sees who opened the app, but not which viewer's session made a loopback
     call. booth-api records the app as the writer.
-  - The header that lists an app's targets is this module's page, around the app's frame. Viewers
-    get it when they open the app from the module's list (the catalog's dashboard links land there).
-    A viewer who opens the app's own URL directly (`…/apps/<id>/`) doesn't. App code is same-origin
-    (item 55), so the header is a disclosure, not a barrier.
+  - The header that lists an app's targets is this module's page, around the app's frame. Every
+    page load of such an app other than that frame's (a top-level visit to `…/apps/<id>/`, a frame
+    another page points at it) is answered 303 to `…/#app=<id>`, the page with the header. The
+    backend knows the frame by its referrer (the module page; the frame sets
+    `referrerpolicy=same-origin`). App code is same-origin (item 55), so the header is a disclosure,
+    not a barrier.
   - Deleting an app doesn't revoke its grants in booth-api. They name an app id that is never
     reused, so nothing can use them, but they stay listed on booth-api's page until an owner
     revokes them.

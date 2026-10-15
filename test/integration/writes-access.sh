@@ -12,6 +12,8 @@
 #      and can't change it
 #   2. the declaration closes the app's egress: the pod rolls to egress=closed, the internet is
 #      dropped (it connected before) while the backend's 8081 still connects; BOOTH_WRITES_URL is set
+#   2b. a page load anywhere but the module page's frame (top-level, or a frame another page sets)
+#      is sent to the module page, which shows the header
 #   3. without booth-api's grant, the write is refused not_granted, saying an owner's grant on the
 #      API page is needed too
 #   4. with the grant, the row is written: through core's gateway, with the app's own workload token
@@ -96,6 +98,19 @@ done
 echo "after declaring: $r"
 [ "$(echo "$r" | json 'd["the internet (1.1.1.1:443)"]')" = "closed:TimeoutError" ] || fail "a writing app still reaches the internet: $r"
 [ "$(echo "$r" | json 'd["backend internal :8081"]')" = open ] || fail "a writing app can't reach the backend's 8081: $r"
+
+step "2b. the header shows on every visit: a page load outside the module page's frame lands there"
+# load DEST REFERER: one page load of the app through core's iframe proxy; prints "<status> <Location>".
+load() {
+  curl -s -o /dev/null -w '%{http_code} %header{location}' -H "Cookie: booth_iframe_session=$owner2" \
+    -H 'Sec-Fetch-Mode: navigate' -H "Sec-Fetch-Dest: $1" ${2:+-H "Referer: $2"} "$core/iframe/streamlit/apps/$A/"
+}
+r=$(load document); echo "top-level: $r"
+[ "$r" = "303 ../../#app=$A" ] || fail "a top-level load of a writing app skipped the header: $r"
+r=$(load iframe "$core/"); echo "framed by another page: $r"
+[ "$r" = "303 ../../#app=$A" ] || fail "a frame outside the module page skipped the header: $r"
+r=$(load iframe "$core/iframe/streamlit/"); echo "the module page's frame: $r"
+[ "$r" = "200 " ] || fail "the module page's own frame didn't get the app: $r"
 
 # WRITE OP API: one write through booth_streamlit.api, printing "ok <row>" or "refused <status> <code> <message>".
 WRITE='import json, sys
