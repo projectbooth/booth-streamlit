@@ -23,6 +23,10 @@ const (
 	LabelComponent = "booth.projectbooth.io/component"
 	LabelAppID     = "booth.projectbooth.io/app-id"
 	LabelWorkspace = "booth.projectbooth.io/workspace"
+	// LabelEgress is on app pods only: "open" or "closed". The chart's second app NetworkPolicy
+	// adds internet egress to pods labelled open, and only when the release's apps.egress.mode is
+	// open, so the release-level closed always wins (ADR 0117 "Reconciled design" item 7).
+	LabelEgress = "booth.projectbooth.io/egress"
 
 	componentApp = "app"
 
@@ -97,6 +101,16 @@ func labels(a apps.App) map[string]string {
 	}
 }
 
+// egressLabel is an app pod's egress: closed for an app with any write target (ADR 0117 item 7:
+// app code that can change platform data gets no internet), open otherwise. Whether open means
+// anything is the chart's apps.egress.mode.
+func egressLabel(a apps.App) string {
+	if a.Writes() {
+		return "closed"
+	}
+	return "open"
+}
+
 func hashOf(v any) string {
 	b, _ := json.Marshal(v)
 	sum := sha256.Sum256(b)
@@ -156,6 +170,7 @@ func deployment(cfg Config, a apps.App, wh *Warehouse) *appsv1.Deployment {
 		replicas = 1
 	}
 	podLabels := labels(a)
+	podLabels[LabelEgress] = egressLabel(a)
 	tmp := resource.MustParse(cfg.TmpSizeLimit)
 	readOnly := corev1.SecurityContext{
 		AllowPrivilegeEscalation: &f,
@@ -228,7 +243,7 @@ func deployment(cfg Config, a apps.App, wh *Warehouse) *appsv1.Deployment {
 	}
 	whAnno := ""
 	if a.Requirements != "" {
-		addPip(cfg, &tpl.Spec, readOnly)
+		addPip(cfg, a, &tpl.Spec, readOnly)
 	}
 	if cfg.Data != nil {
 		addDataAccess(cfg, a, &tpl.Spec, readOnly)
@@ -261,8 +276,10 @@ func deployment(cfg Config, a apps.App, wh *Warehouse) *appsv1.Deployment {
 // app's source (read only, for requirements.txt) and the empty site volume. No token, no bearer,
 // no credentials, and the pod has no service-account token. Data access only ever adds to the
 // regular containers, never to this one.
-func addPip(cfg Config, spec *corev1.PodSpec, sc corev1.SecurityContext) {
+func addPip(cfg Config, a apps.App, spec *corev1.PodSpec, sc corev1.SecurityContext) {
 	pip := cfg.Pip
+	// An app with write targets has no internet: only an in-cluster index can serve it.
+	egressClosed := pip.EgressClosed || (a.Writes() && !pip.IndexEgress)
 	size := resource.MustParse(pip.SiteSizeLimit)
 	spec.Volumes = append(spec.Volumes, corev1.Volume{
 		Name:         "site",
@@ -272,7 +289,7 @@ func addPip(cfg Config, spec *corev1.PodSpec, sc corev1.SecurityContext) {
 		{Name: "BOOTH_PIP_REQUIREMENTS", Value: "/app/" + reqKey},
 		{Name: "BOOTH_PIP_TARGET", Value: siteDir},
 		{Name: "BOOTH_PIP_DEADLINE_SECONDS", Value: fmt.Sprint(int(pip.Deadline.Seconds()))},
-		{Name: "BOOTH_PIP_EGRESS_CLOSED", Value: fmt.Sprint(pip.EgressClosed)},
+		{Name: "BOOTH_PIP_EGRESS_CLOSED", Value: fmt.Sprint(egressClosed)},
 	}
 	if pip.IndexURL != "" {
 		env = append(env, corev1.EnvVar{Name: "PIP_INDEX_URL", Value: pip.IndexURL})
@@ -416,6 +433,11 @@ func addDataAccess(cfg Config, a apps.App, spec *corev1.PodSpec, sc corev1.Secur
 			if data.FilesURL != "" {
 				// The file read proxy, through the gate on loopback (booth_streamlit.files).
 				c.Env = append(c.Env, corev1.EnvVar{Name: "BOOTH_FILES_URL", Value: "http://" + statusAddr + "/files"})
+				if data.Writes && a.Writes() {
+					// The write proxy, through the gate on loopback (booth_streamlit.api), only for an
+					// app with declared write targets.
+					c.Env = append(c.Env, corev1.EnvVar{Name: "BOOTH_WRITES_URL", Value: "http://" + statusAddr + "/writes"})
+				}
 			}
 			if data.Database {
 				c.Env = append(c.Env, corev1.EnvVar{Name: "DATABASE_URL", Value: "postgresql://localhost:5432/" + WorkspaceDatabase(a.Workspace)})

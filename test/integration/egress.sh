@@ -133,7 +133,9 @@ each "$c" "$lan" '^open$' "control (unrestricted pod connects): "
 
 # Not `kubectl ... | grep -q`: under pipefail, grep exiting at its first match can SIGPIPE kubectl
 # and fail the pipeline even though the line matched (run 38272867963 lost a check that way).
-apps_policy_has_internet() { grep -q "0.0.0.0/0" <<<"$(kubectl -n "$ns" get networkpolicy booth-streamlit-apps -o yaml)"; }
+# The internet rule is its own policy (ADR 0117 item 7), selecting app pods labelled egress=open;
+# with apps.egress.mode=closed it isn't rendered at all.
+apps_policy_has_internet() { grep -q "0.0.0.0/0" <<<"$(kubectl -n "$ns" get networkpolicy booth-streamlit-apps-egress-open -o yaml 2>/dev/null || true)"; }
 
 step "apps.egress.mode=closed: the internet is dropped too; DNS and the explicit rules still work"
 helm get values booth-streamlit -n "$ns" -o json >/tmp/egress-values.json

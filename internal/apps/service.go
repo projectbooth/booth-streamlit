@@ -30,6 +30,10 @@ type Service struct {
 	// before the call returns, so the lifecycle can drop what it had observed about that app before
 	// anyone (the proxy) relies on it again.
 	OnChange func(appID string)
+
+	// Revoker, if set, revokes an app's write grants in booth-api on take ownership, which fails
+	// closed if it can't (ADR 0117 item 1a). Unset when this release doesn't enable app writes.
+	Revoker GrantRevoker
 }
 
 // Caps bounds how many apps run at once (design note (a)): sized for a single node.
@@ -95,7 +99,7 @@ func (s *Service) Create(ctx context.Context, c identity.Caller, in Input) (App,
 	a := App{
 		ID: newID(), Workspace: c.Workspace, GateBearer: newBearer(), Owner: c.Subject,
 		Name: in.Name, Description: in.Description, Source: in.Source, Requirements: in.Requirements, Sources: in.Sources, Shared: in.Shared,
-		DesiredState: Stopped, CreatedBy: c.Subject, CreatedAt: now, UpdatedBy: c.Subject, UpdatedAt: now,
+		WriteTargets: []WriteTarget{}, DesiredState: Stopped, CreatedBy: c.Subject, CreatedAt: now, UpdatedBy: c.Subject, UpdatedAt: now,
 	}
 	if err := s.store.Create(ctx, a); err != nil {
 		return App{}, err

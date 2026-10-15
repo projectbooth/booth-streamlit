@@ -413,3 +413,73 @@ func TestCatalogDatasets(t *testing.T) {
 		t.Errorf("without data access: %d, want 404", code)
 	}
 }
+
+// ADR 0117: owners declare write targets with a confirmation; nobody else can; the declaration is
+// in every viewer's app view (the header); without app writes in the install there is no route.
+func TestAppAPI_WriteTargets(t *testing.T) {
+	h := newHarness(t)
+	shared, _ := h.seed()
+	owner := h.as(ownerSub, "acme", identity.RoleOwner)
+	path := "/api/apps/" + shared.ID + "/write-targets"
+	targets := []map[string]any{{"api": "household", "operations": []string{"insert"}}}
+
+	if code, _ := h.do(http.MethodPut, path, owner, map[string]any{"targets": targets, "confirmed": true}); code != 404 {
+		t.Errorf("without app writes: %d, want 404", code)
+	}
+	h.h = NewRouter(Deps{DB: fakeDB{}, Verifier: h.verifier(), Apps: h.svc, DataAccess: true, Writes: true, EgressOpen: true})
+	if code, body := h.do(http.MethodGet, "/api/me", owner, nil); code != 200 || body["writes"] != true || body["egressOpen"] != true {
+		t.Errorf("me: %d %v", code, body)
+	}
+	if code, body := h.do(http.MethodPut, path, owner, map[string]any{"targets": targets}); code != 400 || !strings.Contains(fmt.Sprint(body["error"]), "confirm") {
+		t.Errorf("unconfirmed: %d %v", code, body)
+	}
+	for who, hdr := range map[string]http.Header{
+		"editor":                     h.as(editorSub, "acme", identity.RoleEditor),
+		"viewer":                     h.as(viewerSub, "acme", identity.RoleViewer),
+		"owner of another workspace": h.as(otherSub, "other-team", identity.RoleOwner),
+	} {
+		if code, _ := h.do(http.MethodPut, path, hdr, map[string]any{"targets": targets, "confirmed": true}); code != 403 && code != 404 {
+			t.Errorf("%s declared: %d", who, code)
+		}
+	}
+	code, body := h.do(http.MethodPut, path, owner, map[string]any{"targets": targets, "confirmed": true})
+	if code != 200 || !reflect.DeepEqual(body["writeTargets"], []any{map[string]any{"api": "household", "operations": []any{"insert"}}}) || body["writeTargetsBy"] != ownerSub {
+		t.Fatalf("confirmed: %d %v", code, body)
+	}
+	// Every viewer who can open the app sees the declaration, in the list and the app.
+	viewer := h.as(viewerSub, "acme", identity.RoleViewer)
+	_, list := h.do(http.MethodGet, "/api/apps", viewer, nil)
+	if got := list["apps"].([]any)[0].(map[string]any)["writeTargets"]; !reflect.DeepEqual(got, body["writeTargets"]) {
+		t.Errorf("viewer's list shows %v", got)
+	}
+	if code, body := h.do(http.MethodPut, path, owner, map[string]any{"targets": []map[string]any{{"api": "Bad Slug", "operations": []string{"insert"}}}, "confirmed": true}); code != 400 {
+		t.Errorf("bad slug: %d %v", code, body)
+	}
+	if code, _ := h.do(http.MethodPut, path, owner, map[string]any{"targets": targets, "confirmed": true, "extra": 1}); code != 400 {
+		t.Errorf("unknown field accepted: %d", code)
+	}
+}
+
+type failingRevoker struct{}
+
+func (failingRevoker) RevokeGrants(context.Context, string, string, string) error {
+	return fmt.Errorf("booth-api answered 503")
+}
+
+// Take ownership fails closed when the grant revoke fails: 503, and the owner is unchanged.
+func TestAppAPI_TakeOwnershipFailsClosed(t *testing.T) {
+	h := newHarness(t)
+	shared, _ := h.seed()
+	cur, _ := h.store.Get(context.Background(), "acme", shared.ID)
+	if _, err := h.svc.DataPaused(context.Background(), cur, "owner gone"); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.Revoker = failingRevoker{}
+	code, body := h.do(http.MethodPost, "/api/apps/"+shared.ID+"/take-ownership", h.as("owner-2", "acme", identity.RoleOwner), nil)
+	if code != 503 || !strings.Contains(fmt.Sprint(body["error"]), "ownership did not change") {
+		t.Fatalf("take over with a failing revoke: %d %v", code, body)
+	}
+	if after, _ := h.store.Get(context.Background(), "acme", shared.ID); after.Owner != ownerSub {
+		t.Errorf("owner changed to %q", after.Owner)
+	}
+}

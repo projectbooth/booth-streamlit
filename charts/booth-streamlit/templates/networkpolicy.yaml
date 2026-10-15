@@ -3,10 +3,8 @@
 # pod also has a gate that refuses traffic without the app's bearer (docs/design-v0.md (b)).
 #
 # Ingress: only the module backend, only to the gate's port.
-# Egress (ADR 0104 item 4): DNS always. With apps.egress.mode=open (the default, the user's
-# choice) also the internet, but no in-cluster or link-local destination: every private range
-# and the cloud metadata address (169.254.169.254) are excluded, so app code can't reach booth-core,
-# the module backend, another app, or this namespace's databases. closed allows DNS only.
+# Egress (ADR 0104 item 4): DNS always, plus the data-access and package-index rules below. The
+# internet is a second policy (after this one), so it can be per app.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -91,14 +89,36 @@ spec:
       ports:
         - {protocol: TCP, port: {{ .Values.apps.pip.egress.port }}}
     {{- end }}
-    {{- if eq .Values.apps.egress.mode "open" }}
+{{- if eq .Values.apps.egress.mode "open" }}
+---
+# The internet, for app pods labelled booth.projectbooth.io/egress=open (ADR 0104 item 4, the
+# user's choice; ADR 0117 "Reconciled design" item 7). NetworkPolicies add up, so a pod this one
+# doesn't select has only the rules above. The backend labels an app's pod closed when the app
+# declares any write target, so app code that can change platform data has no internet. No
+# in-cluster or link-local destination either way: every private range and the cloud metadata
+# address (169.254.169.254) are excluded, so app code can't reach booth-core, the module backend,
+# another app, or this namespace's databases. With apps.egress.mode=closed this policy isn't
+# rendered, so the release-level closed wins for every app.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "booth-streamlit.fullname" . }}-apps-egress-open
+  labels:
+    {{- include "booth-streamlit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      booth.projectbooth.io/component: app
+      booth.projectbooth.io/egress: open
+  policyTypes: [Egress]
+  egress:
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
-    {{- else if ne .Values.apps.egress.mode "closed" }}
-    {{- fail "apps.egress.mode must be open or closed (ADR 0104)" }}
-    {{- end }}
+{{- else if ne .Values.apps.egress.mode "closed" }}
+{{- fail "apps.egress.mode must be open or closed (ADR 0104)" }}
+{{- end }}
 {{- if .Values.dataAccess.enabled }}
 ---
 # The backend's own ingress, once it has an internal port: the module port (8080) stays open to

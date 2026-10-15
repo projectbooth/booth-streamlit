@@ -70,6 +70,9 @@ type PipConfig struct {
 	// EgressClosed: apps.egress.mode is closed and no package-index egress is configured, so a
 	// failed install that couldn't connect is explained as such.
 	EgressClosed bool
+	// IndexEgress: the chart has an egress rule to an in-cluster package index (apps.pip.egress),
+	// which an app with write targets keeps when its internet egress is closed.
+	IndexEgress bool
 }
 
 // DataConfig is the per-app data-access wiring (docs/design-data-access.md).
@@ -78,8 +81,11 @@ type DataConfig struct {
 	TokenURL string
 	// BrokerURL is the backend's broker forwarder base; the sidecars' --core-url.
 	BrokerURL string
-	// FilesURL is the backend's internal base the gate forwards /files/... to (the file read proxy).
+	// FilesURL is the backend's internal base the gate forwards /files/... to (the file read proxy),
+	// and /writes/... when Writes is on.
 	FilesURL string
+	// Writes: app writes are on (ADR 0117). An app with write targets gets BOOTH_WRITES_URL.
+	Writes bool
 	// SidecarImage is booth-core's credential sidecar, digest-pinned.
 	SidecarImage     string
 	SidecarResources corev1.ResourceRequirements

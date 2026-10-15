@@ -141,6 +141,52 @@ helm upgrade --install booth-lakehouse "$lakehouse_dir/charts/booth-lakehouse" -
   --set image.repository="${lakehouse_image%:*}" --set image.tag="${lakehouse_image##*:}" --set image.pullPolicy=Never
 kubectl -n booth-minio rollout status deploy/minio --timeout=300s
 
+echo "--- a booth-api stand-in, registered with core as module api (fixtures/api_stub.py; ADR 0117 writes)"
+# booth-api's app writes and the revoke-only path for booth-streamlit (ADR 0117 item 1a) are not
+# merged yet; this stand-in implements its contract's app write route and revoke-principal, behind
+# core's real gateway. Replace it with booth-api's chart once that lands.
+kubectl create namespace booth-api-stub --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n booth-api-stub create configmap api-stub --from-file=api_stub.py="$repo/test/integration/fixtures/api_stub.py" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n booth-api-stub apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api-stub, labels: {app: api-stub}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: api-stub}}
+  template:
+    metadata: {labels: {app: api-stub}}
+    spec:
+      containers:
+        - name: stub
+          image: $runtime_image
+          imagePullPolicy: Never
+          command: [python, /stub/api_stub.py]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 2}
+          volumeMounts: [{name: stub, mountPath: /stub}]
+      volumes: [{name: stub, configMap: {name: api-stub}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: api-stub}
+spec:
+  selector: {app: api-stub}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: booth.projectbooth.io/v1alpha1
+kind: BoothModule
+metadata: {name: api}
+spec:
+  id: api
+  displayName: API (stand-in)
+  version: "0.0.0-stub"
+  contractVersion: "0.1.0"
+  hasOwnUi: false
+  healthCheckPath: /healthz
+  serviceRef: {name: api-stub, port: 8080}
+EOF
+
 echo "--- booth-streamlit with chart defaults (database and bus credential from core), lifecycle test values"
 kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 # No --wait on purpose: the pod cannot start until core has written both Secrets, which it does
@@ -151,6 +197,7 @@ helm upgrade --install booth-streamlit "$repo/charts/booth-streamlit" --namespac
   --set apps.imagePullPolicy=Never \
   --set apps.maxRunning=1 --set apps.idleTimeout=60s \
   --set dataAccess.enabled=true --set dataAccess.database.enabled=true --set dataAccess.refreshMax=20s \
+  --set dataAccess.writes.enabled=true \
   --set dataAccess.lakehouse.enabled=true --set dataAccess.lakehouse.egress.podSelector.app=minio \
   --set 'dataAccess.lakehouse.egress.namespaceSelector.kubernetes\.io/metadata\.name=booth-minio' \
   --set apps.pip.indexUrl=http://pypi.booth-pypi.svc:8080/simple --set apps.pip.trustedHost=pypi.booth-pypi.svc \
@@ -162,3 +209,4 @@ kubectl -n keycloak rollout status deploy/keycloak --timeout=600s
 kubectl -n booth-lakehouse rollout status deploy/booth-lakehouse-lakekeeper --timeout=600s
 kubectl -n booth-lakehouse rollout status deploy/booth-lakehouse-api --timeout=600s
 kubectl -n booth-pypi rollout status deploy/pypi --timeout=300s
+kubectl -n booth-api-stub rollout status deploy/api-stub --timeout=300s

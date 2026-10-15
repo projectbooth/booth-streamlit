@@ -105,6 +105,8 @@ Data access (ADR 0104/0107) is off by default. Each toggle adds to every app pod
 | `dataAccess.database.enabled` | A `pg-sidecar` (core's credential sidecar, postgres mode, read only, the app's workspace) and `DATABASE_URL`. An egress rule to booth-database's Postgres (`dataAccess.database.egress.*`, port 5432). | booth-database (ADR 0081). |
 | `dataAccess.lakehouse.enabled` | When the workspace **has a warehouse at the moment the app starts**: an `s3-sidecar` (s3 mode, read only, the warehouse prefix), the keys file mounted read-only in the app, and `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE` and `BOOTH_WAREHOUSE_ROOT`. A warehouse created later reaches an app at its next start. | booth-lakehouse, and booth-storage with its s3 credential provider. For an in-cluster object store, `dataAccess.lakehouse.egress.*` (both selectors required). An external store goes through `apps.egress.mode=open`. |
 
+| `dataAccess.writes.enabled` (default `false`; needs `dataAccess.enabled`) | App writes through booth-api (ADR 0117). Owners get a **Write targets** panel in the editor. An app with at least one target gets `BOOTH_WRITES_URL` and `booth_streamlit.api` (the write proxy, through the gate), is labelled `booth.projectbooth.io/egress: closed` (no internet, see below), and opens under a header that lists its targets. **Take ownership** first clears the app's targets, then revokes its grants in booth-api, and refuses (503, owner unchanged) if that revoke fails. | booth-api with app writes and the revoke-only path (ADR 0117 item 1a), trusting core's workload issuer. **Without booth-api installed, take ownership always fails**, so leave this off. Each write also needs an owner's grant on booth-api's own page. |
+
 Both sidecars use `dataAccess.sidecar.image` (digest-pinned) and `dataAccess.sidecar.resources`.
 `dataAccess.files.*` sets the file proxy's limits: `maxObjectBytes` 512 MiB, `objectTimeout` 5m,
 `metaTimeout` 30s, `maxConcurrent` 4 per app. `dataAccess.refreshMax` is a test setting; leave it
@@ -122,6 +124,7 @@ differently in each module:
 |---|---|---|
 | booth-storage | `oidc.workloadIssuerUrl` | Storage refuses the app's token. `booth_streamlit.files.read(...)` raises `PermissionError: storage refused the app's access`, and the backend logs `files: storage refused the app's token (<status>): …`. |
 | booth-catalog | `workloadIdentity.issuerUrl` | Catalog refuses the token. Reading a dataset raises `PermissionError: catalog refused the app's access`, and the backend logs `files: catalog refused the app's token …`. The editor's source picker shows "booth-catalog could not be read", with `api: listing catalog datasets …` in the backend log. |
+| booth-api (only with `dataAccess.writes.enabled`) | its workload-issuer setting (`oidc.workloadIssuerUrl` on its `app-writes` branch) | booth-api answers 401 to the app's writes, which `booth_streamlit.api` raises as `WriteRefused` with status 401. It also answers 401 to the revoke, so **take ownership fails** with "the app's write grants could not be revoked", and the backend logs `take ownership refused: … booth-api answered 401`. |
 | booth-lakehouse | `identity.workloadIssuerUrl`, or nothing: when it's empty and booth-lakehouse's `workloadIdentity.enabled` is `true` (its default), it takes the `issuer` key of the Secret core writes for it | Apps start **without** the s3 sidecar. The backend logs `lifecycle: app <id> starts without lakehouse access: booth-lakehouse answered <status>`, and `booth_streamlit.pyarrow_fs()` raises `DataAccessOff` ("this app has no lakehouse access…"). |
 
 **Read the value from core, don't copy a default:**
@@ -224,6 +227,35 @@ app's cluster objects from it.
   (including waking from idle) that much slower. A package can shadow a library the image ships,
   which affects only that app.
 - `apps.egress.mode=open` allows IPv4 only.
+- **Egress is per app, through a pod label.** The internet rule is its own NetworkPolicy
+  (`<release>-apps-egress-open`), which selects app pods labelled `booth.projectbooth.io/egress:
+  open`. The backend labels an app `closed` while it declares any write target (ADR 0117 item 7),
+  so app code that can change platform data has no internet. Such an app's `requirements.txt` can
+  install only from an in-cluster index (`apps.pip.egress`). `apps.egress.mode=closed` doesn't
+  render the open policy at all, so it closes every app.
+- **App writes (ADR 0117), what is and isn't enforced here:**
+  - A write needs both the app's declaration here and booth-api's live grant. This module can't
+    make or read the grant: it never holds a person's sign-in token. The panel links to booth-api's
+    page (`/apis?api=<slug>&grant=streamlit:<workspace>:<appId>`) for the owner to make it there.
+  - The declaration narrows by operation: insert, update and delete, with delete off by default.
+    booth-api's GraphQL write route isn't forwarded, because one GraphQL request could name an
+    operation the owner didn't declare.
+  - `entered_by` and `X-Booth-App-User` are **stated by the app's code** (`booth_streamlit.user()`),
+    not checked: the gate sees who opened the app, but not which viewer's session made a loopback
+    call. booth-api records the app as the writer.
+  - The header that lists an app's targets is this module's page, around the app's frame. Viewers
+    get it when they open the app from the module's list (the catalog's dashboard links land there).
+    A viewer who opens the app's own URL directly (`…/apps/<id>/`) doesn't. App code is same-origin
+    (item 55), so the header is a disclosure, not a barrier.
+  - Deleting an app doesn't revoke its grants in booth-api. They name an app id that is never
+    reused, so nothing can use them, but they stay listed on booth-api's page until an owner
+    revokes them.
+- **psycopg and `timestamptz`.** On the homelab, reading a `timestamptz` column with the image's
+  `psycopg[binary]==3.3.6` crashed the app container (SIGSEGV, exit 139). It hasn't been
+  reproduced on the same base image with the image's full requirements, reading `timestamptz` as
+  text and binary in four session time zones (2026-10-15), so the pin is unchanged. If it happens,
+  format timestamps in SQL (`to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SSOF')`) and select
+  explicit columns instead of `*`.
 
 ## Upgrade and uninstall
 
@@ -237,6 +269,10 @@ app's cluster objects from it.
   - App pods use the Recreate strategy, so each app is briefly down and its viewers reconnect.
   - A running app keeps the lakehouse warehouse it was started with.
   - Stopped and sleeping apps have no pod; they get the new spec when they next start.
+- **Upgrading to the release with app writes (ADR 0117):** every app pod gains the
+  `booth.projectbooth.io/egress` label, and the internet rule moves to its own policy that selects
+  it. A running app has no internet between the chart's policies changing and its pod being
+  replaced, which the backend does at once (as above).
 - **Egress changes:**
   - Changing the egress *rules* (`apps.egress.dns.*`, `apps.pip.egress.*`, `dataAccess.*.egress.*`)
     changes only the NetworkPolicies, so no app restarts, except as below.

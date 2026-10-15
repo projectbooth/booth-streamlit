@@ -40,6 +40,8 @@ const maxBodyBytes = 1 << 20
 //	POST   /api/apps/{id}/take-ownership   become the app's owner while its data access is paused
 //	                                (owners; ADR 0107 item 7, logged)
 //	GET    /api/apps/{id}/ownership-changes   the app's recorded take-overs
+//	PUT    /api/apps/{id}/write-targets   replace the app's write declaration (owners; ADR 0117):
+//	                                {"targets": [{"api", "operations"}], "confirmed": bool}
 //	GET    /api/catalog/datasets?q=   catalog datasets to declare as sources, read as the caller
 //	                                (owners; needs data access, which mints the token)
 func mountAppAPI(r chi.Router, deps Deps) {
@@ -51,6 +53,7 @@ func mountAppAPI(r chi.Router, deps Deps) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"subject": c.Subject, "workspace": c.Workspace, "role": c.Role, "canAuthor": apps.CanAuthor(c),
 				"dataAccess": dataAccess, "catalogSources": deps.Datasets != nil,
+				"writes": deps.Writes, "egressOpen": deps.EgressOpen,
 			})
 		})
 		r.Get("/apps", func(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +99,18 @@ func mountAppAPI(r chi.Router, deps Deps) {
 		r.Post("/apps/{id}/stop", setState(svc, status, apps.Stopped))
 		r.Post("/apps/{id}/take-ownership", func(w http.ResponseWriter, r *http.Request) {
 			a, err := svc.TakeOwnership(r.Context(), caller(r), chi.URLParam(r, "id"))
+			respond(w, http.StatusOK, view(a, status), err)
+		})
+		r.Put("/apps/{id}/write-targets", func(w http.ResponseWriter, r *http.Request) {
+			if !deps.Writes {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "app writes are not enabled in this install (dataAccess.writes.enabled)"})
+				return
+			}
+			var in apps.WriteTargetsInput
+			if !decode(w, r, &in) {
+				return
+			}
+			a, err := svc.SetWriteTargets(r.Context(), caller(r), chi.URLParam(r, "id"), in)
 			respond(w, http.StatusOK, view(a, status), err)
 		})
 		r.Get("/apps/{id}/ownership-changes", func(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +239,10 @@ func writeErr(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case errors.Is(err, apps.ErrCapacity):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case errors.Is(err, apps.ErrConfirmationRequired):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	case errors.Is(err, apps.ErrRevokeFailed):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 	case errors.Is(err, apps.ErrInvalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	default:

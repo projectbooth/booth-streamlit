@@ -14,6 +14,18 @@ export interface Me {
   dataAccess: boolean;
   /** Whether the editor can list catalog datasets to declare as sources (needs data access). */
   catalogSources?: boolean;
+  /** Whether this install turns on app writes through booth-api (ADR 0117). */
+  writes?: boolean;
+  /** Whether the release's app egress is open, so declaring a write target closes this app's. */
+  egressOpen?: boolean;
+}
+
+export type WriteOperation = "insert" | "update" | "delete";
+
+/** One API an app may write to (ADR 0117): booth-api's slug and the operations. */
+export interface WriteTarget {
+  api: string;
+  operations: WriteOperation[];
 }
 
 /** A catalog dataset an owner may declare as an app's source. */
@@ -41,6 +53,8 @@ export interface App {
   owner: string;
   /** Set while core refuses to mint for the owner: the app runs, its data doesn't. */
   dataPausedReason?: string;
+  /** The owner's write declaration: shown to every viewer above the app (ADR 0117). */
+  writeTargets?: WriteTarget[];
   /** What the lifecycle observes (internal/lifecycle). */
   status: { state: "stopped" | "suspended" | "starting" | "installing" | "running" | "failed"; reason?: string };
   createdBy: string;
@@ -89,9 +103,22 @@ export const api = {
   start: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/start`),
   takeOwnership: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/take-ownership`),
   stop: (id: string) => call<App>("POST", `api/apps/${encodeURIComponent(id)}/stop`),
+  /** Replace the app's write declaration; adding a target or an operation needs confirmed. */
+  setWriteTargets: (id: string, targets: WriteTarget[], confirmed: boolean) =>
+    call<App>("PUT", `api/apps/${encodeURIComponent(id)}/write-targets`, { targets, confirmed }),
   /** Catalog datasets readable by the caller (an owner), for declaring sources. */
   datasets: () => call<{ datasets: Dataset[]; total: number }>("GET", "api/catalog/datasets"),
 };
 
 /** Where an app opens: relative, so it stays under the module's iframe path. */
 export const appURL = (id: string) => `apps/${encodeURIComponent(id)}/`;
+
+/** The principal booth-api's grants name for an app: its token's literal subject (ADR 0117). */
+export const principalOf = (workspace: string, id: string) => `streamlit:${workspace}:${id}`;
+
+/**
+ * booth-api's page in the shell, with the app's principal and the API filled in for the grant
+ * (ADR 0117 item 1a). Absolute and opened in the top window: the shell, not this iframe, shows it.
+ */
+export const grantURL = (workspace: string, id: string, apiSlug: string) =>
+  `/apis?${new URLSearchParams({ api: apiSlug, grant: principalOf(workspace, id) }).toString()}`;

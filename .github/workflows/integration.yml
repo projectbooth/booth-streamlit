@@ -156,6 +156,9 @@ jobs:
       - name: "File read proxy (ADR 0107): storage and catalog files, refusals, other workspaces, stolen bearer, paused owner"
         run: test/integration/files-access.sh
 
+      - name: "App writes (ADR 0117 phase 1): declaration and confirmation, closed egress, writes as the app through core to a booth-api stand-in, refusals, take ownership fails closed"
+        run: test/integration/writes-access.sh
+
       - name: "Lakehouse (ADR 0107): Parquet through the s3 sidecar, read-only lease, scanner with the sidecar, pod roll on a refused renewal"
         run: test/integration/lakehouse-access.sh
 

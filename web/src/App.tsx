@@ -1,17 +1,36 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, appURL, type App as BoothApp, type Me } from "./api";
 import { AppEditor } from "./AppEditor";
-import { ErrorText, SHARED_DATA_WORDING, TrustNote } from "./components";
+import { ErrorText, SHARED_DATA_WORDING, TrustNote, WritesHeader, targetsWording } from "./components";
 import { useAsync } from "./useAsync";
 
 // One page, no client-side routes: every API URL is relative to this page's own path, so it must
-// stay at the module root (/iframe/streamlit/). Opening an app navigates the frame to apps/<id>/.
+// stay at the module root (/iframe/streamlit/). Opening an app navigates the frame to apps/<id>/,
+// except an app that can write (ADR 0117): that one opens at #app=<id>, this page with the
+// app in a frame under a header that says what it can change.
 type View = { kind: "list" } | { kind: "new" } | { kind: "edit"; id: string };
+
+const frameHash = (id: string) => `#app=${encodeURIComponent(id)}`;
+
+function framedApp(): string | null {
+  const m = /^#app=([^&]+)$/.exec(window.location.hash);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/** Where an app opens: in the frame with the header if it can write, otherwise directly. */
+export const openURL = (a: BoothApp) => ((a.writeTargets?.length ?? 0) > 0 ? frameHash(a.id) : appURL(a.id));
 
 export function App() {
   const [me] = useAsync(api.me, []);
   const [view, setView] = useState<View>({ kind: "list" });
+  const [framed, setFramed] = useState(framedApp);
+  useEffect(() => {
+    const on = () => setFramed(framedApp());
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
 
+  if (framed) return <AppFrame id={framed} />;
   if (me.status === "loading") return <Shell><p className="text-sm">Loading…</p></Shell>;
   if (me.status === "error") return <Shell><ErrorText error={me.error} /></Shell>;
 
@@ -19,9 +38,27 @@ export function App() {
     <Shell>
       {view.kind === "list" && <AppList me={me.data} onNew={() => setView({ kind: "new" })} onEdit={(id) => setView({ kind: "edit", id })} />}
       {view.kind !== "list" && (
-        <AppEditor id={view.kind === "edit" ? view.id : undefined} onDone={() => setView({ kind: "list" })} />
+        <AppEditor id={view.kind === "edit" ? view.id : undefined} me={me.data} onDone={() => setView({ kind: "list" })} />
       )}
     </Shell>
+  );
+}
+
+/**
+ * An app that can write, under the header every viewer sees (ADR 0117 item 2). The header is this
+ * page's, outside the app's frame, so the app's code doesn't render it. The app is same-origin, so
+ * this is a disclosure, not a barrier (ARCHITECTURE.md item 55; only workspace owners author apps).
+ */
+function AppFrame({ id }: { id: string }) {
+  const [app] = useAsync(() => api.get(id), [id]);
+  if (app.status === "loading") return <Shell><p className="text-sm">Loading…</p></Shell>;
+  if (app.status === "error") return <Shell><ErrorText error={app.error} /></Shell>;
+  const targets = app.data.writeTargets ?? [];
+  return (
+    <div className="flex h-screen flex-col bg-white dark:bg-gray-950">
+      {targets.length > 0 && <WritesHeader targets={targets} />}
+      <iframe title={app.data.name} src={appURL(id)} className="w-full flex-1 border-0" />
+    </div>
   );
 }
 
@@ -108,10 +145,14 @@ function AppRow({ app, me, onEdit, act }: { app: BoothApp; me: Me; onEdit: () =>
             {app.shared && <> · {SHARED_DATA_WORDING}</>}
           </p>
         )}
+        {(app.writeTargets?.length ?? 0) > 0 && (
+          <p className="text-xs text-sky-900 dark:text-sky-200">Can write to: {targetsWording(app.writeTargets ?? [])}</p>
+        )}
         {me.dataAccess && paused && (
           <p className="text-sm text-amber-900 dark:text-amber-200">
             Data access paused: {app.dataPausedReason}
             {canAuthor && " A workspace owner can take ownership to restore it."}
+            {canAuthor && (app.writeTargets?.length ?? 0) > 0 && " Taking ownership clears its write targets and revokes its write grants in the API module."}
           </p>
         )}
         {canAuthor && app.status?.state === "failed" && app.status.reason && (
@@ -120,7 +161,7 @@ function AppRow({ app, me, onEdit, act }: { app: BoothApp; me: Me; onEdit: () =>
         )}
       </div>
       <div className="flex shrink-0 gap-2 text-sm">
-        <a href={appURL(app.id)} className="rounded border border-gray-300 px-2 py-1 dark:border-gray-700">Open</a>
+        <a href={openURL(app)} className="rounded border border-gray-300 px-2 py-1 dark:border-gray-700">Open</a>
         {canAuthor && (
           <>
             <button type="button" onClick={() => act(() => (running ? api.stop(app.id) : api.start(app.id)))} className="rounded border border-gray-300 px-2 py-1 dark:border-gray-700">

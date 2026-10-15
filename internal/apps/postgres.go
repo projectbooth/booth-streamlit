@@ -27,12 +27,12 @@ func NewPostgresStore(ctx context.Context, pool *pgxpool.Pool) (*PostgresStore, 
 	return &PostgresStore{pool: pool}, nil
 }
 
-const cols = `id, workspace, name, description, source, requirements, sources, shared, desired_state, suspended, gate_bearer, owner, data_paused_reason, data_paused_at, data_epoch, created_by, created_at, updated_by, updated_at`
+const cols = `id, workspace, name, description, source, requirements, sources, shared, desired_state, suspended, gate_bearer, owner, data_paused_reason, data_paused_at, data_epoch, created_by, created_at, updated_by, updated_at, write_targets, write_targets_by, write_targets_at`
 
 func scanApp(row pgx.Row) (App, error) {
 	var a App
 	var st string
-	if err := row.Scan(&a.ID, &a.Workspace, &a.Name, &a.Description, &a.Source, &a.Requirements, &a.Sources, &a.Shared, &st, &a.Suspended, &a.GateBearer, &a.Owner, &a.DataPausedReason, &a.DataPausedAt, &a.DataEpoch, &a.CreatedBy, &a.CreatedAt, &a.UpdatedBy, &a.UpdatedAt); err != nil {
+	if err := row.Scan(&a.ID, &a.Workspace, &a.Name, &a.Description, &a.Source, &a.Requirements, &a.Sources, &a.Shared, &st, &a.Suspended, &a.GateBearer, &a.Owner, &a.DataPausedReason, &a.DataPausedAt, &a.DataEpoch, &a.CreatedBy, &a.CreatedAt, &a.UpdatedBy, &a.UpdatedAt, &a.WriteTargets, &a.WriteTargetsBy, &a.WriteTargetsAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return App{}, ErrNotFound
 		}
@@ -43,6 +43,13 @@ func scanApp(row pgx.Row) (App, error) {
 	if a.DataPausedAt != nil {
 		t := a.DataPausedAt.UTC()
 		a.DataPausedAt = &t
+	}
+	if a.WriteTargetsAt != nil {
+		t := a.WriteTargetsAt.UTC()
+		a.WriteTargetsAt = &t
+	}
+	if a.WriteTargets == nil {
+		a.WriteTargets = []WriteTarget{}
 	}
 	return a, nil
 }
@@ -107,10 +114,14 @@ func (s *PostgresStore) Create(ctx context.Context, a App) error {
 	if a.Sources == nil {
 		a.Sources = []string{}
 	}
+	if a.WriteTargets == nil {
+		a.WriteTargets = []WriteTarget{}
+	}
 	return s.inTx(ctx, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO apps (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+		_, err := tx.Exec(ctx, `INSERT INTO apps (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
 			a.ID, a.Workspace, a.Name, a.Description, a.Source, a.Requirements, a.Sources, a.Shared, string(a.DesiredState), a.Suspended, a.GateBearer,
-			a.Owner, a.DataPausedReason, a.DataPausedAt, a.DataEpoch, a.CreatedBy, a.CreatedAt, a.UpdatedBy, a.UpdatedAt)
+			a.Owner, a.DataPausedReason, a.DataPausedAt, a.DataEpoch, a.CreatedBy, a.CreatedAt, a.UpdatedBy, a.UpdatedAt,
+			a.WriteTargets, a.WriteTargetsBy, a.WriteTargetsAt)
 		if err != nil {
 			return fmt.Errorf("creating app: %w", err)
 		}
@@ -215,7 +226,9 @@ func (s *PostgresStore) TakeOwnership(ctx context.Context, workspace, id, newOwn
 		return "", err
 	}
 	prev := before.Owner
-	if _, err := tx.Exec(ctx, `UPDATE apps SET owner = $3, data_paused_reason = '', data_paused_at = NULL WHERE workspace = $1 AND id = $2`, workspace, id, newOwner); err != nil {
+	// The write declaration goes with the old owner (ADR 0117 item 2): the new owner re-declares.
+	if _, err := tx.Exec(ctx, `UPDATE apps SET owner = $3, data_paused_reason = '', data_paused_at = NULL,
+		write_targets = '[]', write_targets_by = $3, write_targets_at = $4 WHERE workspace = $1 AND id = $2`, workspace, id, newOwner, at); err != nil {
 		return "", fmt.Errorf("setting owner: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO app_ownership_changes (app_id, workspace, previous_owner, new_owner, reason, at) VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -228,6 +241,14 @@ func (s *PostgresStore) TakeOwnership(ctx context.Context, workspace, id, newOwn
 		return "", err
 	}
 	return prev, tx.Commit(ctx)
+}
+
+func (s *PostgresStore) SetWriteTargets(ctx context.Context, workspace, id string, targets []WriteTarget, by string, at time.Time) (App, error) {
+	if targets == nil {
+		targets = []WriteTarget{}
+	}
+	return scanApp(s.pool.QueryRow(ctx, `UPDATE apps SET write_targets = $3, write_targets_by = $4, write_targets_at = $5
+		WHERE workspace = $1 AND id = $2 RETURNING `+cols, workspace, id, targets, by, at))
 }
 
 func (s *PostgresStore) OwnershipChanges(ctx context.Context, workspace, id string) ([]OwnershipChange, error) {

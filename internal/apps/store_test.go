@@ -49,7 +49,7 @@ func stores(t *testing.T) map[string]Store {
 
 func app(id, ws, name string, shared bool) App {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
-	return App{ID: id, Workspace: ws, Name: name, Source: "src-" + id, Sources: []string{}, Shared: shared, DesiredState: Stopped, GateBearer: "bearer-" + id,
+	return App{ID: id, Workspace: ws, Name: name, Source: "src-" + id, Sources: []string{}, WriteTargets: []WriteTarget{}, Shared: shared, DesiredState: Stopped, GateBearer: "bearer-" + id,
 		CreatedBy: "o", CreatedAt: now, UpdatedBy: "o", UpdatedAt: now}
 }
 
@@ -179,6 +179,58 @@ func TestStores_DataAccess(t *testing.T) {
 			ch, err := s.OwnershipChanges(ctx, "acme", "d1")
 			if err != nil || len(ch) != 1 || ch[0].PreviousOwner != "alice" || ch[0].NewOwner != "carol" || ch[0].Reason != "owner gone" || !ch[0].At.Equal(at) {
 				t.Errorf("OwnershipChanges: %+v %v", ch, err)
+			}
+		})
+	}
+}
+
+func TestStores_WriteTargets(t *testing.T) {
+	for name, s := range stores(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			a := app("w1", "acme", "x", true)
+			a.Owner = "alice"
+			if err := s.Create(ctx, a); err != nil {
+				t.Fatal(err)
+			}
+			at := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+			want := []WriteTarget{{API: "household", Operations: []string{"insert", "update"}}, {API: "notes", Operations: []string{"insert"}}}
+			got, err := s.SetWriteTargets(ctx, "acme", "w1", want, "alice", at)
+			if err != nil || !reflect.DeepEqual(got.WriteTargets, want) || got.WriteTargetsBy != "alice" || got.WriteTargetsAt == nil || !got.WriteTargetsAt.Equal(at) {
+				t.Fatalf("SetWriteTargets: %+v %v", got, err)
+			}
+			// Read back by every path the proxy and the lifecycle use.
+			if g, _ := s.Get(ctx, "acme", "w1"); !reflect.DeepEqual(g.WriteTargets, want) {
+				t.Errorf("Get: %+v", g.WriteTargets)
+			}
+			if g, _ := s.GetByBearer(ctx, "bearer-w1"); !reflect.DeepEqual(g.WriteTargets, want) {
+				t.Errorf("GetByBearer: %+v", g.WriteTargets)
+			}
+			if l, _ := s.List(ctx, "acme", true); len(l) != 1 || !reflect.DeepEqual(l[0].WriteTargets, want) {
+				t.Errorf("List (the header needs them): %+v", l)
+			}
+			if _, err := s.SetWriteTargets(ctx, "other", "w1", nil, "x", at); !errors.Is(err, ErrNotFound) {
+				t.Errorf("SetWriteTargets across workspaces: %v", err)
+			}
+			// An edit leaves the declaration alone.
+			upd, _ := s.Get(ctx, "acme", "w1")
+			upd.Name = "y"
+			if err := s.Update(ctx, upd); err != nil {
+				t.Fatal(err)
+			}
+			if g, _ := s.Get(ctx, "acme", "w1"); !reflect.DeepEqual(g.WriteTargets, want) {
+				t.Errorf("after Update: %+v", g.WriteTargets)
+			}
+			// Take ownership clears it in the same transaction as the owner change.
+			if _, err := s.TakeOwnership(ctx, "acme", "w1", "carol", "owner gone", at.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			g, _ := s.Get(ctx, "acme", "w1")
+			if g.WriteTargets == nil || len(g.WriteTargets) != 0 || g.WriteTargetsBy != "carol" {
+				t.Errorf("after take-over: %+v by %q, want an empty declaration", g.WriteTargets, g.WriteTargetsBy)
+			}
+			if cleared, err := s.SetWriteTargets(ctx, "acme", "w1", nil, "carol", at); err != nil || cleared.WriteTargets == nil || len(cleared.WriteTargets) != 0 {
+				t.Errorf("SetWriteTargets(nil): %+v %v", cleared.WriteTargets, err)
 			}
 		})
 	}
