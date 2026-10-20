@@ -292,3 +292,24 @@ func TestChart_Pip(t *testing.T) {
 		t.Errorf("a podSelector without a namespaceSelector rendered:\n%s", out)
 	}
 }
+
+// apps.maxSourceBytes sets the backend's source limit; 0 (the default) leaves the env var out, so
+// the backend keeps its own default. Values the backend would cap or refuse fail at render time.
+func TestChart_MaxSourceBytes(t *testing.T) {
+	re := regexp.MustCompile(`BOOTH_STREAMLIT_MAX_SOURCE_BYTES\s+value: "(\d+)"`)
+	if dep := string(helmTemplate(t, "templates/deployment.yaml")); strings.Contains(dep, "BOOTH_STREAMLIT_MAX_SOURCE_BYTES") {
+		t.Error("the source limit rendered at the default")
+	}
+	for _, v := range []string{"524288", "921600"} {
+		m := re.FindStringSubmatch(string(helmTemplate(t, "templates/deployment.yaml", "--set", "apps.maxSourceBytes="+v)))
+		if m == nil || m[1] != v {
+			t.Errorf("apps.maxSourceBytes=%s rendered %v", v, m)
+		}
+	}
+	for _, v := range []string{"921601", "-1", "1.5"} {
+		out, err := helm(t, "template", "booth-streamlit", chartDir(), "--show-only", "templates/deployment.yaml", "--set", "apps.maxSourceBytes="+v)
+		if err == nil || !strings.Contains(string(out), "apps.maxSourceBytes must be") {
+			t.Errorf("apps.maxSourceBytes=%s: want a render failure, got %v\n%s", v, err, out)
+		}
+	}
+}

@@ -62,6 +62,13 @@ spec:
               value: {{ .Values.apps.gateResources | toJson | quote }}
             - name: BOOTH_APP_TMP_SIZE_LIMIT
               value: {{ .Values.apps.tmpSizeLimit | quote }}
+            {{- with .Values.apps.maxSourceBytes }}
+            {{- if or (lt (float64 .) 1.0) (gt (float64 .) 921600.0) (ne (float64 .) (float64 (int64 .))) }}
+            {{- fail "apps.maxSourceBytes must be a whole number of bytes from 1 to 921600 (900 KiB: an app's source is delivered in a ConfigMap, which Kubernetes caps at 1 MiB), or 0 for the default" }}
+            {{- end }}
+            - name: BOOTH_STREAMLIT_MAX_SOURCE_BYTES
+              value: {{ int64 . | quote }}
+            {{- end }}
             - name: BOOTH_APP_PIP_INDEX_URL
               value: {{ .Values.apps.pip.indexUrl | quote }}
             - name: BOOTH_APP_PIP_TRUSTED_HOST
