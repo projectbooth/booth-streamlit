@@ -85,6 +85,10 @@ apps:
     limits: {cpu: 100m, memory: 64Mi, ephemeral-storage: 16Mi}
   # The writable /tmp of each app (the root filesystem is read-only).
   tmpSizeLimit: 256Mi
+  # The largest app source (app.py) in bytes. 0 = the backend's default, 256 KiB (262144). At most
+  # 921600 (900 KiB): the source is delivered to the app's pod in a ConfigMap, which Kubernetes
+  # caps at 1 MiB, and requirements.txt (up to 16 KiB) shares it.
+  maxSourceBytes: 0
   # Per-app packages (ADR 0107; docs/design-data-access.md item 5): an app may have a
   # requirements.txt (package specifiers only, at most 16 KiB). An init container from the runtime
   # image installs it on every pod start, with no token, bearer or credentials mounted, into a

@@ -59,6 +59,7 @@ the first label as well.
 | `apps.maxRunning` | `5` | How many apps may run at once across the install (`0` = no cap). Raising it also needs `quota.hard` raised. At the cap, Start answers 409 ("too many apps are running; stop one first"), and opening a sleeping app shows "Too many apps are running right now…". |
 | `apps.maxRunningPerWorkspace` | `0` (no cap) | The same, per workspace. |
 | `apps.idleTimeout` | `30m` | An app with no open tab and no request for this long is suspended; opening it wakes it. A viewer waiting on the starting page counts as activity. `0` disables idle shutdown. |
+| `apps.maxSourceBytes` | `0` (the backend's default, 256 KiB = `262144`) | An app's source (`app.py`) needs to be larger. Sets `BOOTH_STREAMLIT_MAX_SOURCE_BYTES`; save answers 400 ("source is larger than N bytes") above it. At most `921600` (900 KiB): the source reaches the app's pod in a ConfigMap, which Kubernetes caps at 1 MiB, and `requirements.txt` (up to 16 KiB) shares it. A value above that, below 1 or not a whole number fails to render. See the source-size item under "Known limits". |
 | `apps.maxWebsocket` | `8h` | One tab's websocket is closed after this long; Streamlit reconnects and the viewer's identity is checked again. |
 | `apps.egress.mode` | `open` | `open`: app pods may reach the internet over IPv4. They can't reach the private ranges `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `100.64.0.0/10`, nor link-local `169.254.0.0/16` (the cloud metadata address). That means no booth-core, no other apps, and **no hosts on a 192.168.x home LAN**. `closed`: DNS only, plus the specific rules below. Any other value fails to render. |
 | `apps.egress.dns.*` | kube-dns in `kube-system` | Your cluster DNS has other labels. |
@@ -228,6 +229,16 @@ app's cluster objects from it.
   (including waking from idle) that much slower. A package can shadow a library the image ships,
   which affects only that app.
 - `apps.egress.mode=open` allows IPv4 only.
+- **Large sources cost on every reconcile, not just on save.** Every 5 seconds the backend reads
+  every app (running or not) from Postgres, fetches each app's ConfigMap, and lists them all, so
+  each app's source crosses the wire about three times per pass. Measured on kind (2026-10-20, JSON,
+  as the backend's client uses): one ConfigMap GET took 3.5 ms at 4 KiB and 9.9 ms at 900 KiB, and
+  listing ten took 3.4 ms at 4 KiB each and 54.7 ms at 900 KiB each. So one large app adds a few
+  milliseconds a pass, and ten at the ceiling add roughly 0.15 s a pass and about 4 MiB/s of
+  steady traffic to the API server. The editor saves the whole source as one JSON request of at
+  most 1 MiB. JSON escaping (newlines, quotes, backslashes) makes the request larger than the
+  source, so a source near 900 KiB that is dense in quotes or backslashes can be refused as "invalid
+  JSON body: http: request body too large" even though it is under `apps.maxSourceBytes`.
 - **Egress is per app, through a pod label.** The internet rule is its own NetworkPolicy
   (`<release>-apps-egress-open`), which selects app pods labelled `booth.projectbooth.io/egress:
   open`. The backend labels an app `closed` while it declares any write or upload target (ADR 0117 item 7),
