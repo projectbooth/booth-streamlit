@@ -15,7 +15,7 @@
 #   2. the declaration closes the app's egress: the pod rolls to egress=closed, the internet is
 #      dropped (it connected before) while the backend's 8081 still connects; BOOTH_WRITES_URL is set
 #   2b. a page load anywhere but the module page's frame (top-level, or a frame another page sets)
-#      is sent to the module page, which shows the header
+#      is sent to the module page, whose header has the Permissions control
 #   3. without booth-api's grant, the write is refused not_granted, saying an owner's grant on the
 #      API page is needed too
 #   4. with the grant, the row is written: through core's gateway, with the app's own workload token

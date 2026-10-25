@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import type { App as BoothApp, Role, UploadTarget, WriteTarget } from "../api";
 
-// ADR 0117: the Write targets panel (the app's side of the declaration), the header every viewer
-// sees above an app that can write, and the plain-words confirmation.
+// ADR 0117: the Write targets panel (the app's side of the declaration), the disclosure every viewer
+// can open around an app that can write (the header's Permissions control), and the plain-words
+// confirmation.
 
 const base: BoothApp = {
   id: "aaaa", workspace: "acme", name: "Finance", description: "", shared: true, desiredState: "running",
@@ -149,18 +150,23 @@ describe("header disclosure", () => {
     expect(within(row).queryByText(/Can write to/)).toBeNull();
   });
 
-  it("the framed view renders the header outside the app's frame", async () => {
+  it("the framed view has a collapsed Permissions control outside the app's frame, not a banner", async () => {
     backend("viewer", writing);
     window.location.hash = "#app=aaaa";
     render(<App />);
-    const note = await screen.findByRole("note", { name: "What this app can change" });
+    const button = await screen.findByRole("button", { name: "Permissions" });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("note", { name: "What this app can change" })).toBeNull();
+    await userEvent.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    const note = screen.getByRole("note", { name: "What this app can change" });
     expect(note).toHaveTextContent("This app can write to: household (add, change). Anyone who opens it can make these changes, as the app.");
     expect(screen.getByTitle("Finance")).toHaveAttribute("src", "apps/aaaa/");
-    // The backend lets only this frame load the app without the header; it knows it by referrer.
+    // The backend lets only this frame load the app without this page; it knows it by referrer.
     expect(screen.getByTitle("Finance")).toHaveAttribute("referrerpolicy", "same-origin");
   });
 
-  it("an app that only uploads opens under the header too, which names the folder", async () => {
+  it("an app that only uploads opens in the frame page too, whose Permissions name the folder", async () => {
     const uploading = { ...base, uploadTargets: [{ backend: "local", prefix: "finance/inbox/" }] } as BoothApp;
     backend("viewer", uploading);
     render(<App />);
@@ -169,6 +175,7 @@ describe("header disclosure", () => {
     expect(within(row).getByRole("link", { name: "Open" })).toHaveAttribute("href", "#app=aaaa");
     window.location.hash = "#app=aaaa";
     render(<App />);
-    expect(await screen.findByRole("note", { name: "What this app can change" })).toHaveTextContent("This app can write to: upload to local:finance/inbox/.");
+    await userEvent.click(await screen.findByRole("button", { name: "Permissions" }));
+    expect(screen.getByRole("note", { name: "What this app can change" })).toHaveTextContent("This app can write to: upload to local:finance/inbox/.");
   });
 });

@@ -37,12 +37,12 @@ export const targetsWording = (targets: WriteTarget[], uploads: UploadTarget[] =
   [...targets.map((t) => `${t.api} (${opWords(t.operations)})`), ...uploads.map((u) => `upload to ${folderWording(u)}`)].join(" · ");
 
 /**
- * ADR 0117 item 2: every viewer sees what an app can write and upload, above the app, on every visit.
- * Rendered by this module's page, never by the app, and it can't be dismissed.
+ * ADR 0117 item 2: what an app can write and upload, in plain words. Rendered by this module's page,
+ * never by the app: in the header's Permissions control, which every viewer can open on every visit.
  */
-export function WritesHeader({ targets, uploads = [] }: { targets: WriteTarget[]; uploads?: UploadTarget[] }) {
+export function WritesDisclosure({ targets, uploads = [] }: { targets: WriteTarget[]; uploads?: UploadTarget[] }) {
   return (
-    <p role="note" aria-label="What this app can change" className="border-b border-sky-300 bg-sky-50 px-4 py-2 text-sm text-sky-950 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100">
+    <p role="note" aria-label="What this app can change" className="text-sm">
       This app can write to: {targetsWording(targets, uploads)}. Anyone who opens it can make these changes, as the app.
     </p>
   );

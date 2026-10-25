@@ -85,6 +85,11 @@ so an app can't hide it.
 - Text: "This app can write to: Household transactions (add, change) · upload to
   local:finance/inbox/".
 - Every viewer sees it on every visit, and it can't be dismissed.
+- *Changed 2026-10-25 (user's UX feedback; coordinator ruling, option A):* the permanent strip is
+  gone. The same text is in a collapsed **Permissions** control in the frame page's slim header,
+  rendered by the module page outside the app's frame, which any viewer can open on any visit.
+  ADR 0117 item 2 is amended to match ("available in the app's header"). See "Disclosure" under
+  the phase 2 build notes.
 
 **Ownership handover:** take-ownership clears every write and upload target in the same
 transaction that changes the owner. Writes are then refused until the new owner re-declares and
@@ -272,7 +277,9 @@ ADR 0117 as amended. What changed from this note:
 - **Header:** an app with targets opens at `#app=<id>` on the module's own page: the header, then
   the app in a frame. An app without targets opens directly, as before. Any other page load of an
   app with targets (top-level, or a frame whose referrer isn't the module page or the app itself)
-  gets 303 to that page, so the header shows on every visit (coordinator review of PR #24).
+  gets 303 to that page, so the header shows on every visit (coordinator review of PR #24). Since
+  2026-10-25 the header is a slim bar (the app's name and a collapsed Permissions control), not a
+  strip of text; see "Disclosure" below.
 - **Egress:** as item 5, with the `booth.projectbooth.io/egress` label always set (`open` or
   `closed`) and pip told its egress is closed unless `apps.pip.egress` names an index.
 
@@ -311,6 +318,14 @@ v0.1.3) and ADR 0117 items 1a, 6, 7, 8 and 8a. What changed from item 3 above:
   the owner. Either revoke failing is 503 and the owner doesn't change.
 - **Header and egress:** an app with any write or upload target opens under the header (which
   lists folders as "upload to local:finance/inbox/") and is labelled `egress: closed`.
+
+**Disclosure (2026-10-25, replaces the permanent strip).** A collapsed **Permissions** control
+(`aria-expanded`) in the frame page's header, the module page's and outside the app's frame. It
+opens to exactly what the strip said: "This app can write to: household (add, change) · upload to
+local:finance/inbox/. Anyone who opens it can make these changes, as the app." Any viewer can open
+it on any visit; the 303 above keeps every visit on this page. The list row's "Can write to: …"
+line is unchanged. No first-use prompt (built in PR #27's first commit, then removed by the
+coordinator's ruling: it wasn't requested).
 
 **Tests:** unit (store, service, upload proxy, revokers, gate, lifecycle, API, config, chart
 contract, Python helper, UI) and real-core (`writes-access.sh` steps 5b, 6b and 7, against the real

@@ -61,7 +61,7 @@ export interface App {
   owner: string;
   /** Set while core refuses to mint for the owner: the app runs, its data doesn't. */
   dataPausedReason?: string;
-  /** The owner's write declaration: shown to every viewer above the app (ADR 0117). */
+  /** The owner's write declaration: disclosed to every viewer around the app (ADR 0117). */
   writeTargets?: WriteTarget[];
   /** The owner's upload declaration: shown with the write targets (ADR 0117). */
   uploadTargets?: UploadTarget[];
@@ -147,5 +147,5 @@ export const cleanPrefix = (p: string) => {
   return s === "" ? "" : s + "/";
 };
 
-/** Whether an app declares anything it can change: it then opens under the header and has no internet. */
+/** Whether an app declares anything it can change: it then opens in the module's frame page and has no internet. */
 export const changesData = (a: App) => (a.writeTargets?.length ?? 0) + (a.uploadTargets?.length ?? 0) > 0;
