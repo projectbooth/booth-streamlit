@@ -85,11 +85,11 @@ so an app can't hide it.
 - Text: "This app can write to: Household transactions (add, change) · upload to
   local:finance/inbox/".
 - Every viewer sees it on every visit, and it can't be dismissed.
-- *Changed 2026-10-25 (user's UX feedback):* the permanent strip is gone. The same text is in a
-  collapsed **Permissions** control in the frame page's slim header (any viewer can open it on any
-  visit), and a **Write allowed** prompt shows the first time in a browser session that the
-  viewer's own write or upload uses a declared target. Both are rendered by the module page,
-  outside the app's frame. See "Disclosure" under the phase 2 build notes.
+- *Changed 2026-10-25 (user's UX feedback; coordinator ruling, option A):* the permanent strip is
+  gone. The same text is in a collapsed **Permissions** control in the frame page's slim header,
+  rendered by the module page outside the app's frame, which any viewer can open on any visit.
+  ADR 0117 item 2 is amended to match ("available in the app's header"). See "Disclosure" under
+  the phase 2 build notes.
 
 **Ownership handover:** take-ownership clears every write and upload target in the same
 transaction that changes the owner. Writes are then refused until the new owner re-declares and
@@ -319,25 +319,13 @@ v0.1.3) and ADR 0117 items 1a, 6, 7, 8 and 8a. What changed from item 3 above:
 - **Header and egress:** an app with any write or upload target opens under the header (which
   lists folders as "upload to local:finance/inbox/") and is labelled `egress: closed`.
 
-**Disclosure (2026-10-25, replaces the permanent strip).** Both parts are the module page's, outside
-the app's frame:
-- **Permissions**, a collapsed control in the header (`aria-expanded`), lists exactly what the strip
-  said: "This app can write to: household (add, change) · upload to local:finance/inbox/. Anyone
-  who opens it can make these changes, as the app." Any viewer can open it on any visit.
-- **Write allowed**, a prompt the first time in a browser session (`sessionStorage`) that the
-  viewer's own write or upload uses a declared target: which target, what it allows, "made as the
-  app, not as you", "anyone who opens this app can make these changes", with OK and "See all
-  permissions". It stays until dismissed and isn't shown again for that target in that session.
-- How the page knows: the write and upload proxies remember each successful call's target for its
-  `X-Booth-App-User` (`dataaccess.Uses`: in memory, per backend replica, 12 hours, bounded), and
-  the page polls `GET api/apps/{id}/uses` every 4 s while the tab is visible, until every declared
-  target has been prompted. It answers only the caller's own uses, for an app the caller can open.
-- Not a toast from `booth_streamlit`: an app usually calls `st.rerun()` right after saving, and a
-  toast sent before a rerun is never shown (checked against Streamlit 1.64).
-- Limits: `X-Booth-App-User` is the app's statement, so an app that leaves it out (or doesn't use
-  `booth_streamlit`) gets no prompt; the Permissions control doesn't depend on it. With
-  `replicaCount` above 1 a prompt can be missed or late. Uses from before the session aren't
-  prompted.
+**Disclosure (2026-10-25, replaces the permanent strip).** A collapsed **Permissions** control
+(`aria-expanded`) in the frame page's header, the module page's and outside the app's frame. It
+opens to exactly what the strip said: "This app can write to: household (add, change) · upload to
+local:finance/inbox/. Anyone who opens it can make these changes, as the app." Any viewer can open
+it on any visit; the 303 above keeps every visit on this page. The list row's "Can write to: …"
+line is unchanged. No first-use prompt (built in PR #27's first commit, then removed by the
+coordinator's ruling: it wasn't requested).
 
 **Tests:** unit (store, service, upload proxy, revokers, gate, lifecycle, API, config, chart
 contract, Python helper, UI) and real-core (`writes-access.sh` steps 5b, 6b and 7, against the real

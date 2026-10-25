@@ -520,31 +520,3 @@ func TestAppAPI_TakeOwnershipFailsClosed(t *testing.T) {
 		t.Errorf("owner changed to %q", after.Owner)
 	}
 }
-
-// The "Write allowed" prompt: anyone who can open the app reads the targets their own writes and
-// uploads used, never anyone else's, and nothing for an app they can't open.
-func TestAppAPI_Uses(t *testing.T) {
-	h := newHarness(t)
-	shared, private := h.seed()
-	uses := &dataaccess.Uses{}
-	uses.Record(shared.ID, viewerSub, dataaccess.Use{Kind: "write", API: "household"})
-	uses.Record(shared.ID, editorSub, dataaccess.Use{Kind: "upload", Backend: "local", Prefix: "finance/inbox/"})
-	uses.Record(private.ID, viewerSub, dataaccess.Use{Kind: "write", API: "household"})
-	h.h = NewRouter(Deps{DB: fakeDB{}, Verifier: h.verifier(), Apps: h.svc, DataAccess: true, Writes: true, Uses: uses})
-
-	code, body := h.do(http.MethodGet, "/api/apps/"+shared.ID+"/uses", h.as(viewerSub, "acme", identity.RoleViewer), nil)
-	got, _ := body["uses"].([]any)
-	if code != 200 || len(got) != 1 || got[0].(map[string]any)["api"] != "household" || body["now"] == nil {
-		t.Fatalf("viewer: %d %v", code, body)
-	}
-	if code, _ := h.do(http.MethodGet, "/api/apps/"+private.ID+"/uses", h.as(viewerSub, "acme", identity.RoleViewer), nil); code != 404 && code != 403 {
-		t.Errorf("an app the viewer can't open: %d", code)
-	}
-	if code, _ := h.do(http.MethodGet, "/api/apps/"+shared.ID+"/uses", h.as(otherSub, "other-team", identity.RoleOwner), nil); code != 404 && code != 403 {
-		t.Errorf("another workspace: %d", code)
-	}
-	h.h = NewRouter(Deps{DB: fakeDB{}, Verifier: h.verifier(), Apps: h.svc})
-	if code, body := h.do(http.MethodGet, "/api/apps/"+shared.ID+"/uses", h.as(viewerSub, "acme", identity.RoleViewer), nil); code != 200 || len(body["uses"].([]any)) != 0 {
-		t.Errorf("without Uses: %d %v", code, body)
-	}
-}

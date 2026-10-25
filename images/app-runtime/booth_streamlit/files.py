@@ -161,16 +161,6 @@ def _bytes_of(data: Any) -> bytes:
     raise TypeError(f"upload takes bytes or a binary file object, not {type(data).__name__}")
 
 
-def _viewer() -> Optional[str]:
-    from . import user  # looked up at call time, so tests can stand one in
-
-    try:
-        u = user()
-    except Exception:  # noqa: BLE001 - outside a Streamlit session (a script, a test): nobody to name
-        return None
-    return u.subject if u else None
-
-
 def upload(backend_id: str, folder: str, name: str, data: Any, content_type: Optional[str] = None) -> str:
     """Add one file to a declared Storage folder; returns its stored path.
 
@@ -181,13 +171,8 @@ def upload(backend_id: str, folder: str, name: str, data: Any, content_type: Opt
     url = _uploads_base() + "/" + _urlparse.quote(backend_id, safe="") + "?" + _urlparse.urlencode({"prefix": folder, "name": name})
     # The built-in table, not the platform's (a Windows registry calls .csv vnd.ms-excel).
     ct = content_type or _mimetypes.MimeTypes().guess_type(name)[0] or "application/octet-stream"
-    headers = {"Content-Type": ct}
-    who = _viewer()
-    if who:
-        # Who uploaded, so Booth can show them the "Write allowed" prompt; not sent to Storage.
-        headers["X-Booth-App-User"] = who
     for attempt in range(_UPLOAD_ATTEMPTS):
-        req = _urlreq.Request(url, data=body, method="POST", headers=headers)
+        req = _urlreq.Request(url, data=body, method="POST", headers={"Content-Type": ct})
         try:
             with _urlreq.urlopen(req, timeout=_TIMEOUT) as resp:  # noqa: S310 - fixed loopback URL from the pod spec
                 return _json.load(resp)["path"]

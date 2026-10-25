@@ -60,20 +60,18 @@ func (f *fakeAPI) last() (*http.Request, string) {
 
 type writesRig struct {
 	*rig
-	api  *fakeAPI
-	srv  *httptest.Server
-	uses *Uses
-	a    apps.App // acme, declares household: insert, update
-	b    apps.App // other-team, declares nothing
+	api *fakeAPI
+	srv *httptest.Server
+	a   apps.App // acme, declares household: insert, update
+	b   apps.App // other-team, declares nothing
 }
 
 func newWritesRig(t *testing.T) *writesRig {
 	t.Helper()
 	r := newRig(t)
 	api := newFakeAPI(t)
-	uses := &Uses{}
-	in := &Internal{Apps: r.svc, Tokens: r.tok, Writes: &Writes{GatewayURL: api.srv.URL, MaxConcurrent: 2, Uses: uses}}
-	wr := &writesRig{rig: r, api: api, uses: uses}
+	in := &Internal{Apps: r.svc, Tokens: r.tok, Writes: &Writes{GatewayURL: api.srv.URL, MaxConcurrent: 2}}
+	wr := &writesRig{rig: r, api: api}
 	wr.a = r.app(t, "acme", "alice")
 	var err error
 	wr.a, err = r.svc.SetWriteTargets(context.Background(), identity.Caller{Subject: "alice", Workspace: "acme", Role: identity.RoleOwner}, wr.a.ID,

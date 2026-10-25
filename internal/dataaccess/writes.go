@@ -35,9 +35,8 @@ import (
 // booth-api's GraphQL write route is not forwarded: one GraphQL request can name any enabled
 // operation, so the declaration's operations couldn't be enforced here without parsing it.
 //
-// Forwarded headers: Content-Type, Idempotency-Key, If-Match, and X-Booth-App-User (stated by the
-// app's code; booth-api's audit, and this module's "Write allowed" prompt (Uses); never used for
-// authorization). booth-api's answer is relayed as is,
+// Forwarded headers: Content-Type, Idempotency-Key, If-Match, and X-Booth-App-User (audit only,
+// stated by the app's code; never used for authorization). booth-api's answer is relayed as is,
 // except that a not_granted refusal says in plain words what is missing.
 //
 // Refused here: an API or operation the app doesn't declare (403 not_a_write_target), any other
@@ -49,8 +48,6 @@ type Writes struct {
 	Timeout       time.Duration
 	MaxConcurrent int
 	HTTP          *http.Client
-	// Uses, if set, records each successful write for the page's "Write allowed" prompt.
-	Uses *Uses
 
 	mu   sync.Mutex
 	busy map[string]int // app id -> writes in flight
@@ -230,9 +227,6 @@ func (wr *Writes) forward(w http.ResponseWriter, r *http.Request, a apps.App, to
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, writeErrorBodyMaxSize))
 	if resp.StatusCode == http.StatusForbidden {
 		respBody = explainNotGranted(respBody, a, t.api)
-	}
-	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
-		wr.Uses.Record(a.ID, out.Header.Get("X-Booth-App-User"), Use{Kind: "write", API: t.api})
 	}
 	for _, h := range []string{"Content-Type", "ETag", "Retry-After", "Idempotent-Replayed"} {
 		if v := resp.Header.Get(h); v != "" {

@@ -47,8 +47,6 @@ type Uploads struct {
 	Timeout       time.Duration
 	MaxConcurrent int
 	HTTP          *http.Client
-	// Uses, if set, records each successful upload for the page's "Write allowed" prompt.
-	Uses *Uses
 
 	mu   sync.Mutex
 	busy map[string]int // app id -> uploads in flight
@@ -229,11 +227,6 @@ func (u *Uploads) forward(w http.ResponseWriter, r *http.Request, a apps.App, to
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, writeErrorBodyMaxSize))
 	w.Header().Set("Cache-Control", "no-store")
 	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
-		// X-Booth-App-User is the app's statement of who uploaded, for the prompt only; booth-storage
-		// is not sent it.
-		if v := r.Header.Get("X-Booth-App-User"); len(v) <= maxAppUserLen && headerValuePattern.MatchString(v) {
-			u.Uses.Record(a.ID, v, Use{Kind: "upload", Backend: t.Backend, Prefix: t.Prefix})
-		}
 		writeJSON(w, http.StatusCreated, map[string]any{"backend": t.Backend, "path": stored, "size": body.n.Load()})
 		return
 	}

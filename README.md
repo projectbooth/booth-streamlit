@@ -39,7 +39,7 @@ the owner also grants the app on booth-api's own page, and a write needs both. A
 `booth_streamlit.api.insert/update/delete`, through the gate to the backend, which refuses anything
 undeclared and forwards the rest to booth-api through core's gateway with the app's own token. Every
 viewer can see the targets in the Permissions control in the header above the app, on every
-visit, and gets a "Write allowed" prompt the first time in a session that their own write uses one. An app with any target has no
+visit. An app with any target has no
 internet. Take ownership revokes the app's grants in booth-api and fails closed. Phase 2
 (`dataAccess.uploads.enabled`, off by default): the same panel declares Storage folders, the owner
 grants them on booth-storage's Admin page (which sets extensions and size), and app code adds files

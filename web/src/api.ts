@@ -36,9 +36,6 @@ export interface UploadTarget {
   prefix: string;
 }
 
-/** A declared target the viewer's own write or upload just used (GET api/apps/{id}/uses). */
-export type Use = ({ kind: "write"; api: string } | { kind: "upload"; backend: string; prefix: string }) & { at: string };
-
 /** A catalog dataset an owner may declare as an app's source. */
 export interface Dataset {
   id: string;
@@ -119,8 +116,6 @@ export const api = {
   /** Replace the app's write and upload declaration; adding a target, operation or folder needs confirmed. */
   setWriteTargets: (id: string, targets: WriteTarget[], uploads: UploadTarget[], confirmed: boolean) =>
     call<App>("PUT", `api/apps/${encodeURIComponent(id)}/write-targets`, { targets, uploads, confirmed }),
-  /** The declared targets the caller's own writes and uploads used recently, and the server's time. */
-  uses: (id: string) => call<{ now: string; uses: Use[] }>("GET", `api/apps/${encodeURIComponent(id)}/uses`),
   /** Catalog datasets readable by the caller (an owner), for declaring sources. */
   datasets: () => call<{ datasets: Dataset[]; total: number }>("GET", "api/catalog/datasets"),
 };

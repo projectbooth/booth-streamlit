@@ -85,9 +85,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// Which targets each viewer's writes and uploads went to: the proxies record, the page's
-	// "Write allowed" prompt reads (ADR 0117 item 2).
-	uses := &dataaccess.Uses{}
 	if cfg.Data.Enabled {
 		// The internal port: the gates' token refresh and the sidecars' broker forwarder. App pods
 		// reach it; nothing else should (NetworkPolicy), and it never goes through core.
@@ -110,11 +107,11 @@ func run() error {
 		minter := &dataaccess.CoreMinter{URL: cfg.Data.MintURL, Credential: cfg.Data.MintCredential}
 		var revokers apps.Revokers
 		if cfg.Data.Writes {
-			in.Writes = &dataaccess.Writes{GatewayURL: cfg.Data.CoreURL, Uses: uses}
+			in.Writes = &dataaccess.Writes{GatewayURL: cfg.Data.CoreURL}
 			revokers = append(revokers, &dataaccess.GrantRevoker{GatewayURL: cfg.Data.CoreURL, Module: "booth-api", Path: dataaccess.APIRevokePath, Minter: minter})
 		}
 		if cfg.Data.Uploads {
-			in.Uploads = &dataaccess.Uploads{GatewayURL: cfg.Data.CoreURL, MaxBytes: cfg.Data.UploadsMaxBytes, Uses: uses}
+			in.Uploads = &dataaccess.Uploads{GatewayURL: cfg.Data.CoreURL, MaxBytes: cfg.Data.UploadsMaxBytes}
 			revokers = append(revokers, &dataaccess.GrantRevoker{GatewayURL: cfg.Data.CoreURL, Module: "booth-storage", Path: dataaccess.StorageRevokePath, Minter: minter})
 		}
 		if len(revokers) > 0 {
@@ -149,7 +146,7 @@ func run() error {
 		Handler: api.NewRouter(api.Deps{
 			DB: pool, Bus: bus, Outbox: store, Datasets: datasets, Web: api.WebDir(cfg.WebDir),
 			Verifier: verifier, Apps: svc, Status: ctrl.Status, DataAccess: cfg.Data.Enabled,
-			Writes: cfg.Data.Enabled && cfg.Data.Writes, Uploads: cfg.Data.Enabled && cfg.Data.Uploads, EgressOpen: cfg.Lifecycle.EgressOpen, Uses: uses,
+			Writes: cfg.Data.Enabled && cfg.Data.Writes, Uploads: cfg.Data.Enabled && cfg.Data.Uploads, EgressOpen: cfg.Lifecycle.EgressOpen,
 			Proxy: &proxy.Handler{
 				Verifier:     verifier,
 				Apps:         resolver,

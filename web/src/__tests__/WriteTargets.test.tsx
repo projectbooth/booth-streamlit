@@ -1,13 +1,12 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
-import { USES_POLL_MS } from "../App";
-import type { App as BoothApp, Role, UploadTarget, Use, WriteTarget } from "../api";
+import type { App as BoothApp, Role, UploadTarget, WriteTarget } from "../api";
 
 // ADR 0117: the Write targets panel (the app's side of the declaration), the disclosure every viewer
-// gets around an app that can write (the header's Permissions control and the "Write allowed"
-// prompt), and the plain-words confirmation.
+// can open around an app that can write (the header's Permissions control), and the plain-words
+// confirmation.
 
 const base: BoothApp = {
   id: "aaaa", workspace: "acme", name: "Finance", description: "", shared: true, desiredState: "running",
@@ -16,9 +15,6 @@ const base: BoothApp = {
 };
 
 type Call = { method: string; url: string; body?: unknown };
-
-/** What GET api/apps/aaaa/uses answers; tests change it between polls. */
-let usesAnswer: { now: string; uses: Use[] } = { now: "2026-10-25T12:00:00Z", uses: [] };
 
 function backend(role: Role, app: BoothApp, me: Record<string, unknown> = {}) {
   const calls: Call[] = [];
@@ -34,7 +30,6 @@ function backend(role: Role, app: BoothApp, me: Record<string, unknown> = {}) {
         return json(200, { subject: "o", workspace: "acme", role, canAuthor: role === "owner", dataAccess: true, writes: true, egressOpen: true, ...me });
       if (key === "GET api/apps") return json(200, { apps: [app] });
       if (key === "GET api/apps/aaaa") return json(200, { ...app, source: "import streamlit" });
-      if (key === "GET api/apps/aaaa/uses") return json(200, usesAnswer);
       if (key === "PUT api/apps/aaaa/write-targets") {
         const b = body as { targets: WriteTarget[]; uploads: UploadTarget[] };
         return json(200, { ...app, writeTargets: b.targets, uploadTargets: b.uploads });
@@ -182,88 +177,5 @@ describe("header disclosure", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Permissions" }));
     expect(screen.getByRole("note", { name: "What this app can change" })).toHaveTextContent("This app can write to: upload to local:finance/inbox/.");
-  });
-});
-
-describe("Write allowed prompt", () => {
-  const both = {
-    ...base,
-    writeTargets: [{ api: "household", operations: ["insert", "update"] }],
-    uploadTargets: [{ backend: "local", prefix: "finance/inbox/" }],
-  } as BoothApp;
-  const at = (s: number) => new Date(Date.parse("2026-10-25T12:00:00Z") + s * 1000).toISOString();
-
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    sessionStorage.clear();
-    usesAnswer = { now: at(0), uses: [] };
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-    window.location.hash = "";
-  });
-
-  const poll = () => act(() => vi.advanceTimersByTimeAsync(USES_POLL_MS));
-  const usesCalls = (calls: { url: string }[]) => calls.filter((c) => c.url === "api/apps/aaaa/uses").length;
-
-  it("shows the first time this session a target is used, once, and links to all permissions", async () => {
-    // A use from before this session (another tab, an hour ago) isn't "just now".
-    usesAnswer = { now: at(0), uses: [{ kind: "write", api: "household", at: at(-3600) }] };
-    const calls = backend("viewer", both);
-    window.location.hash = "#app=aaaa";
-    const { unmount } = render(<App />);
-    await screen.findByRole("button", { name: "Permissions" });
-    await poll();
-    expect(screen.queryByRole("dialog", { name: "Write allowed" })).toBeNull();
-
-    usesAnswer = { now: at(5), uses: [{ kind: "write", api: "household", at: at(4) }] };
-    await poll();
-    const prompt = await screen.findByRole("dialog", { name: "Write allowed" });
-    expect(prompt).toHaveTextContent("This app just saved a change to household. It can add, change rows there.");
-    expect(prompt).toHaveTextContent("The change is made as the app, not as you. Anyone who opens this app can make these changes.");
-    await userEvent.click(within(prompt).getByRole("button", { name: "OK" }));
-    expect(screen.queryByRole("dialog", { name: "Write allowed" })).toBeNull();
-
-    // The same target again: no prompt, also after a reload in the same session.
-    await poll();
-    expect(screen.queryByRole("dialog", { name: "Write allowed" })).toBeNull();
-    unmount();
-    render(<App />);
-    await screen.findByRole("button", { name: "Permissions" });
-    await poll();
-    expect(screen.queryByRole("dialog", { name: "Write allowed" })).toBeNull();
-
-    // The upload folder is a separate target; "See all permissions" opens the control.
-    usesAnswer = { now: at(9), uses: [{ kind: "write", api: "household", at: at(8) }, { kind: "upload", backend: "local", prefix: "finance/inbox/", at: at(8) }] };
-    await poll();
-    const upload = await screen.findByRole("dialog", { name: "Write allowed" });
-    expect(upload).toHaveTextContent("This app just added a file to local:finance/inbox/.");
-    expect(upload).not.toHaveTextContent("household");
-    await userEvent.click(within(upload).getByRole("button", { name: "See all permissions" }));
-    expect(screen.getByRole("button", { name: "Permissions" })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("note", { name: "What this app can change" })).toHaveTextContent("household (add, change) · upload to local:finance/inbox/");
-
-    // Every declared target has been prompted: it stops asking.
-    const n = usesCalls(calls);
-    await poll();
-    await poll();
-    expect(usesCalls(calls)).toBe(n);
-  });
-
-  it("a target the app doesn't declare isn't prompted, and a hidden tab isn't polled", async () => {
-    const calls = backend("viewer", both);
-    window.location.hash = "#app=aaaa";
-    render(<App />);
-    await screen.findByRole("button", { name: "Permissions" });
-    usesAnswer = { now: at(5), uses: [{ kind: "write", api: "notes", at: at(4) }] };
-    await poll();
-    expect(screen.queryByRole("dialog", { name: "Write allowed" })).toBeNull();
-
-    const hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-    const n = usesCalls(calls);
-    await poll();
-    expect(usesCalls(calls)).toBe(n);
-    hidden.mockRestore();
   });
 });
