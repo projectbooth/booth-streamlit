@@ -18,6 +18,7 @@ type uploadsRig struct {
 	*rig
 	storage *fakeAPI
 	srv     *httptest.Server
+	uses    *Uses
 	a       apps.App // acme, declares local:finance/inbox/
 	b       apps.App // other-team, declares nothing
 }
@@ -27,8 +28,9 @@ func newUploadsRig(t *testing.T, maxBytes int64) *uploadsRig {
 	r := newRig(t)
 	st := newFakeAPI(t)
 	st.status, st.body = 200, `{"path":"ignored","size":3}`
-	in := &Internal{Apps: r.svc, Tokens: r.tok, Uploads: &Uploads{GatewayURL: st.srv.URL, MaxBytes: maxBytes, MaxConcurrent: 2}}
-	u := &uploadsRig{rig: r, storage: st}
+	uses := &Uses{}
+	in := &Internal{Apps: r.svc, Tokens: r.tok, Uploads: &Uploads{GatewayURL: st.srv.URL, MaxBytes: maxBytes, MaxConcurrent: 2, Uses: uses}}
+	u := &uploadsRig{rig: r, storage: st, uses: uses}
 	u.a = r.app(t, "acme", "alice")
 	var err error
 	u.a, err = r.svc.SetWriteTargets(context.Background(), identity.Caller{Subject: "alice", Workspace: "acme", Role: identity.RoleOwner}, u.a.ID,

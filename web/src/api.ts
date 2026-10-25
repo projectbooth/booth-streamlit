@@ -36,6 +36,9 @@ export interface UploadTarget {
   prefix: string;
 }
 
+/** A declared target the viewer's own write or upload just used (GET api/apps/{id}/uses). */
+export type Use = ({ kind: "write"; api: string } | { kind: "upload"; backend: string; prefix: string }) & { at: string };
+
 /** A catalog dataset an owner may declare as an app's source. */
 export interface Dataset {
   id: string;
@@ -61,7 +64,7 @@ export interface App {
   owner: string;
   /** Set while core refuses to mint for the owner: the app runs, its data doesn't. */
   dataPausedReason?: string;
-  /** The owner's write declaration: shown to every viewer above the app (ADR 0117). */
+  /** The owner's write declaration: disclosed to every viewer around the app (ADR 0117). */
   writeTargets?: WriteTarget[];
   /** The owner's upload declaration: shown with the write targets (ADR 0117). */
   uploadTargets?: UploadTarget[];
@@ -116,6 +119,8 @@ export const api = {
   /** Replace the app's write and upload declaration; adding a target, operation or folder needs confirmed. */
   setWriteTargets: (id: string, targets: WriteTarget[], uploads: UploadTarget[], confirmed: boolean) =>
     call<App>("PUT", `api/apps/${encodeURIComponent(id)}/write-targets`, { targets, uploads, confirmed }),
+  /** The declared targets the caller's own writes and uploads used recently, and the server's time. */
+  uses: (id: string) => call<{ now: string; uses: Use[] }>("GET", `api/apps/${encodeURIComponent(id)}/uses`),
   /** Catalog datasets readable by the caller (an owner), for declaring sources. */
   datasets: () => call<{ datasets: Dataset[]; total: number }>("GET", "api/catalog/datasets"),
 };
@@ -147,5 +152,5 @@ export const cleanPrefix = (p: string) => {
   return s === "" ? "" : s + "/";
 };
 
-/** Whether an app declares anything it can change: it then opens under the header and has no internet. */
+/** Whether an app declares anything it can change: it then opens in the module's frame page and has no internet. */
 export const changesData = (a: App) => (a.writeTargets?.length ?? 0) + (a.uploadTargets?.length ?? 0) > 0;

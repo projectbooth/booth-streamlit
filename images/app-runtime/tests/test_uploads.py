@@ -5,6 +5,7 @@ import threading
 
 import pytest
 
+import booth_streamlit as bs
 from booth_streamlit import DataAccessOff, DataAccessPaused, files
 
 
@@ -17,7 +18,7 @@ def loopback(monkeypatch):
     class H(http.server.BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-            seen.append({"path": self.path, "body": body, "content_type": self.headers.get("Content-Type")})
+            seen.append({"path": self.path, "body": body, "content_type": self.headers.get("Content-Type"), "user": self.headers.get("X-Booth-App-User")})
             code, payload = answers.pop(0) if answers else (201, {"backend": "local", "path": "finance/inbox/20261015T090000Z-abc123-s.csv", "size": len(body)})
             raw = json.dumps(payload).encode()
             self.send_response(code)
@@ -43,6 +44,15 @@ def test_upload_returns_the_stored_path(loopback):
     assert seen[0]["path"] == "/uploads/local?prefix=finance%2Finbox%2F&name=s.csv"
     assert seen[0]["body"] == b"a,b\n"
     assert seen[0]["content_type"] == "text/csv"
+
+
+def test_upload_names_the_viewer_for_the_prompt(loopback, monkeypatch):
+    seen, _ = loopback
+    monkeypatch.setattr(bs, "user", lambda: bs.User(subject="viewer-7", workspace="acme", role="viewer"))
+    files.upload("local", "finance/inbox/", "s.csv", b"x")
+    monkeypatch.setattr(bs, "user", lambda: None)
+    files.upload("local", "finance/inbox/", "s.csv", b"x")
+    assert [s["user"] for s in seen] == ["viewer-7", None]
 
 
 def test_upload_takes_file_objects(loopback):

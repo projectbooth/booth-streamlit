@@ -64,7 +64,8 @@ func (a App) AllowsUpload(backend, prefix string) bool {
 func (a App) Uploads() bool { return len(a.UploadTargets) > 0 }
 
 // ChangesData reports whether the app declares any write or upload target: such an app runs with
-// egress closed and opens under the header every viewer sees (ADR 0117 items 2 and 7).
+// egress closed and opens under the header whose Permissions control every viewer can open
+// (ADR 0117 items 2 and 7).
 func (a App) ChangesData() bool { return a.Writes() || a.Uploads() }
 
 func validateUploadTargets(in []UploadTarget) ([]UploadTarget, error) {

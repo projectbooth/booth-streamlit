@@ -7,6 +7,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -40,6 +41,8 @@ const maxBodyBytes = 1 << 20
 //	POST   /api/apps/{id}/take-ownership   become the app's owner while its data access is paused
 //	                                (owners; ADR 0107 item 7, logged)
 //	GET    /api/apps/{id}/ownership-changes   the app's recorded take-overs
+//	GET    /api/apps/{id}/uses      the declared targets the caller's own writes and uploads used
+//	                                recently, for the "Write allowed" prompt (anyone who can open it)
 //	PUT    /api/apps/{id}/write-targets   replace the app's write declaration (owners; ADR 0117):
 //	                                {"targets": [{"api", "operations"}], "confirmed": bool}
 //	GET    /api/catalog/datasets?q=   catalog datasets to declare as sources, read as the caller
@@ -120,6 +123,16 @@ func mountAppAPI(r chi.Router, deps Deps) {
 			}
 			a, err := svc.SetWriteTargets(r.Context(), caller(r), chi.URLParam(r, "id"), in)
 			respond(w, http.StatusOK, view(a, status), err)
+		})
+		r.Get("/apps/{id}/uses", func(w http.ResponseWriter, r *http.Request) {
+			c := caller(r)
+			a, err := svc.Get(r.Context(), c, chi.URLParam(r, "id"))
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, http.StatusOK, map[string]any{"now": time.Now().UTC(), "uses": deps.Uses.For(a.ID, c.Subject)})
 		})
 		r.Get("/apps/{id}/ownership-changes", func(w http.ResponseWriter, r *http.Request) {
 			changes, err := svc.OwnershipChanges(r.Context(), caller(r), chi.URLParam(r, "id"))

@@ -15,12 +15,14 @@
 #   2. the declaration closes the app's egress: the pod rolls to egress=closed, the internet is
 #      dropped (it connected before) while the backend's 8081 still connects; BOOTH_WRITES_URL is set
 #   2b. a page load anywhere but the module page's frame (top-level, or a frame another page sets)
-#      is sent to the module page, which shows the header
+#      is sent to the module page, whose header has the Permissions control
 #   3. without booth-api's grant, the write is refused not_granted, saying an owner's grant on the
 #      API page is needed too
 #   4. with the grant, the row is written: through core's gateway, with the app's own workload token
 #      (subject streamlit:<ws>:<appId>, booth_module streamlit), X-Workspace, X-Booth-App-User,
 #      an Idempotency-Key, and entered_by from the viewer
+#   4b. the Write allowed prompt's source: GET /api/apps/<id>/uses lists the viewer's own write for
+#      them, and nothing for another member
 #   5. an undeclared operation and an undeclared API are refused by the module; booth-api never hears
 #   5b. uploads: declaring a Storage folder (confirmed) gives the pod BOOTH_UPLOADS_URL; without
 #      booth-storage's grant an upload is refused not_granted; the owner grants it on booth-storage's
@@ -154,6 +156,16 @@ check 'd.workspace' "$ws"
 check 'd.appUser' it-viewer-subject
 check 'd.body.data.entered_by' it-viewer-subject
 check 'String((d.idempotencyKey||"").length)' 36
+
+step "4b. the Write allowed prompt: the viewer's own write is listed for them, and for nobody else"
+api "$viewer" GET /api/me; vsub=$(echo "$body" | json 'd.subject')
+out=$(as_user_code "$A" "${WRITE/it-viewer-subject/$vsub}" insert household); echo "$out"
+case "$out" in "ok "*) ;; *) fail "write as the viewer: $out" ;; esac
+api "$viewer" GET "/api/apps/$A/uses"
+[ "$code" = 200 ] && [ "$(echo "$body" | json 'd.uses.map(u => u.kind + ":" + u.api).join(",")')" = "write:household" ] \
+  || fail "the viewer's uses: $code $body"
+api "$owner2" GET "/api/apps/$A/uses"
+[ "$code" = 200 ] && [ "$(echo "$body" | json 'String(d.uses.length)')" = 0 ] || fail "another member sees the viewer's uses: $code $body"
 
 step "5. an undeclared operation and an undeclared API: refused by the module, booth-api never called"
 n=$(stub GET /stub/log | json 'd.length')

@@ -71,6 +71,9 @@ type Deps struct {
 	// EgressOpen: the release's apps.egress.mode is open, so the editor says that declaring a
 	// write or upload target closes this app's egress.
 	EgressOpen bool
+	// Uses is what each viewer's writes and uploads went to, for the "Write allowed" prompt; nil
+	// answers an empty list.
+	Uses *dataaccess.Uses
 }
 
 // dbPingTimeout bounds the /healthz database check, so a hung Postgres shows as unhealthy within
