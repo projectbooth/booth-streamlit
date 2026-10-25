@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -146,17 +147,17 @@ func checkUploadName(n string) error {
 // errUploadTooLarge is what capReader returns past the module's ceiling.
 var errUploadTooLarge = errors.New("upload too large")
 
-// capReader counts what it reads and fails once more than max bytes have come through.
+// capReader counts what it reads and fails once more than max bytes have come through. The count is
+// atomic: the transport can still be reading the body after booth-storage has answered.
 type capReader struct {
 	r   io.Reader
 	max int64
-	n   int64
+	n   atomic.Int64
 }
 
 func (c *capReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
-	c.n += int64(n)
-	if c.n > c.max {
+	if c.n.Add(int64(n)) > c.max {
 		return n, errUploadTooLarge
 	}
 	return n, err
@@ -224,7 +225,7 @@ func (u *Uploads) forward(w http.ResponseWriter, r *http.Request, a apps.App, to
 	}
 	defer resp.Body.Close()
 	// Never the contents (ADR 0117 item 5).
-	log.Printf("uploads: app=%s workspace=%s backend=%s path=%s status=%d bytes=%d duration=%s", a.ID, a.Workspace, t.Backend, stored, resp.StatusCode, body.n, time.Since(start).Round(time.Millisecond))
+	log.Printf("uploads: app=%s workspace=%s backend=%s path=%s status=%d bytes=%d duration=%s", a.ID, a.Workspace, t.Backend, stored, resp.StatusCode, body.n.Load(), time.Since(start).Round(time.Millisecond))
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, writeErrorBodyMaxSize))
 	w.Header().Set("Cache-Control", "no-store")
 	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
@@ -233,7 +234,7 @@ func (u *Uploads) forward(w http.ResponseWriter, r *http.Request, a apps.App, to
 		if v := r.Header.Get("X-Booth-App-User"); len(v) <= maxAppUserLen && headerValuePattern.MatchString(v) {
 			u.Uses.Record(a.ID, v, Use{Kind: "upload", Backend: t.Backend, Prefix: t.Prefix})
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"backend": t.Backend, "path": stored, "size": body.n})
+		writeJSON(w, http.StatusCreated, map[string]any{"backend": t.Backend, "path": stored, "size": body.n.Load()})
 		return
 	}
 	code, msg := explainStorageRefusal(resp.StatusCode, storageMessage(raw), a, t)
